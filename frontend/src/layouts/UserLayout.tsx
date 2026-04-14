@@ -9,7 +9,7 @@ export function UserLayout() {
   const location = useLocation();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
-  const isModulesRoute = location.pathname.startsWith('/user/modules');
+  const isModuleDetailRoute = /^\/user\/modules\/[^/]+$/.test(location.pathname);
 
   const avatarText = useMemo(() => {
     const email = user?.email ?? '';
@@ -57,7 +57,7 @@ export function UserLayout() {
             <h1 className="text-sm font-bold text-slate-900">HelpDesk Academy</h1>
           </div>
 
-          {!isModulesRoute ? (
+          {!isModuleDetailRoute ? (
             <div className="flex items-center gap-1 md:gap-2">
               {[
                 { to: '/user/dashboard', label: 'Dashboard', icon: LayoutDashboard },
