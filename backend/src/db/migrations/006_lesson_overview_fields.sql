@@ -1,0 +1,5 @@
+ALTER TABLE lessons
+ADD COLUMN IF NOT EXISTS overview_text TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE lessons
+ADD COLUMN IF NOT EXISTS overview_image_url TEXT;
