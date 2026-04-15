@@ -47,14 +47,18 @@ export function UserLayout() {
   }, []);
 
   return (
-    <div className="min-h-screen bg-slate-50">
-      <nav className="sticky top-0 z-40 border-b border-slate-200 bg-white/95 backdrop-blur">
+    <div className="user-theme min-h-screen bg-dark-bg text-white">
+      <div className="landing-gradient pointer-events-none fixed inset-0" />
+
+      <nav className="relative z-40 sticky top-0 border-b border-white/10 bg-dark-bg/80 backdrop-blur-lg">
         <div className="flex w-full items-center justify-between gap-3 px-4 py-3 md:px-8">
           <div className="flex items-center gap-3">
-            <div className="rounded-lg bg-emerald-600 p-2 text-white">
+            <div className="rounded-xl bg-brand-600 p-2 text-white shadow-lg shadow-brand-500/20">
               <BookOpenCheck size={20} />
             </div>
-            <h1 className="text-sm font-bold text-slate-900">HelpDesk Academy</h1>
+            <h1 className="text-sm font-bold text-white">
+              HelpDesk <span className="text-brand-400">Academy</span>
+            </h1>
           </div>
 
           {!isModuleDetailRoute ? (
@@ -68,8 +72,10 @@ export function UserLayout() {
                   key={item.to}
                   to={item.to}
                   className={({ isActive }) =>
-                    `flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition ${
-                      isActive ? 'bg-emerald-50 text-emerald-700' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                    `flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition ${
+                      isActive
+                        ? 'border border-brand-500/20 bg-brand-500/10 text-brand-300'
+                        : 'text-slate-300 hover:bg-white/10 hover:text-white'
                     }`
                   }
                 >
@@ -86,11 +92,11 @@ export function UserLayout() {
             <button
               type="button"
               onClick={() => setIsMenuOpen((prev) => !prev)}
-              className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              className="inline-flex items-center gap-2 rounded-lg border border-white/15 bg-slate-900/70 px-2 py-1.5 text-sm font-semibold text-slate-200 hover:bg-white/10"
               aria-haspopup="menu"
               aria-expanded={isMenuOpen}
             >
-              <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-emerald-600 text-xs font-bold uppercase text-white">
+              <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-brand-600 text-xs font-bold uppercase text-white">
                 {avatarText}
               </span>
               <ChevronDown size={14} className={`${isMenuOpen ? 'rotate-180' : ''} transition-transform`} />
@@ -99,13 +105,13 @@ export function UserLayout() {
             {isMenuOpen ? (
               <div
                 role="menu"
-                className="absolute right-0 mt-2 w-64 rounded-xl border border-slate-200 bg-white p-3 shadow-lg"
+                className="absolute right-0 mt-2 w-64 rounded-2xl border border-white/10 bg-slate-900/95 p-3 shadow-2xl"
               >
-                <div className="flex items-center gap-3 rounded-lg bg-slate-50 p-3">
-                  <UserCircle2 size={30} className="text-slate-500" />
+                <div className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/5 p-3">
+                  <UserCircle2 size={30} className="text-slate-300" />
                   <div className="min-w-0">
-                    <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Signed in as</p>
-                    <p className="truncate text-sm font-semibold text-slate-900">{user?.email ?? 'Unknown user'}</p>
+                    <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Signed in as</p>
+                    <p className="truncate text-sm font-semibold text-white">{user?.email ?? 'Unknown user'}</p>
                   </div>
                 </div>
 
@@ -124,8 +130,8 @@ export function UserLayout() {
                       }}
                       className={`inline-flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm font-medium ${
                         location.pathname.startsWith(item.to)
-                          ? 'bg-emerald-50 text-emerald-700'
-                          : 'text-slate-700 hover:bg-slate-100'
+                          ? 'border border-brand-500/20 bg-brand-500/10 text-brand-300'
+                          : 'text-slate-200 hover:bg-white/10'
                       }`}
                     >
                       <item.icon size={16} />
@@ -141,7 +147,7 @@ export function UserLayout() {
                     setIsMenuOpen(false);
                     handleSignOut();
                   }}
-                  className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-700"
+                  className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-md bg-brand-600 px-3 py-2 text-sm font-semibold text-white hover:bg-brand-500"
                 >
                   <LogOut size={16} />
                   Sign out
@@ -152,7 +158,7 @@ export function UserLayout() {
         </div>
       </nav>
 
-      <main className="w-full p-4 md:p-8">
+      <main className="user-content relative z-10 w-full p-4 md:p-8">
         <Outlet />
       </main>
     </div>

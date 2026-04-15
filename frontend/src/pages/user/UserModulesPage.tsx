@@ -118,12 +118,12 @@ export function UserModulesPage() {
 
   return (
     <section className="space-y-6">
-      <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="rounded-2xl border border-white/10 bg-slate-900/70 p-5 shadow-sm">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div>
-            <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-emerald-700">Learning Center</span>
-            <h2 className="mt-1 text-2xl font-bold text-slate-900">My Modules</h2>
-            <p className="mt-1 text-sm text-slate-600">Find a module quickly, continue active training, or start a new track.</p>
+            <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-brand-300">Learning Center</span>
+            <h2 className="mt-1 text-2xl font-bold text-white">My Modules</h2>
+            <p className="mt-1 text-sm text-slate-300">Find a module quickly, continue active training, or start a new track.</p>
           </div>
 
           <div className="relative w-full max-w-xl">
@@ -133,46 +133,46 @@ export function UserModulesPage() {
               placeholder="Search title, category, or description..."
               value={searchQuery}
               onChange={(event) => setSearchQuery(event.target.value)}
-              className="w-full rounded-lg border border-slate-300 bg-white py-2.5 pl-9 pr-3 text-sm text-slate-700 outline-none ring-0 placeholder:text-slate-400 focus:border-emerald-400"
+              className="w-full rounded-lg border border-white/20 bg-slate-900/70 py-2.5 pl-9 pr-3 text-sm text-slate-200 outline-none ring-0 placeholder:text-slate-400 focus:border-brand-500"
             />
           </div>
         </div>
       </div>
 
       {error ? <p className="rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{error}</p> : null}
-      {isLoading ? <p className="text-sm text-slate-500">Loading modules...</p> : null}
+      {isLoading ? <p className="text-sm text-slate-400">Loading modules...</p> : null}
 
       {!isLoading ? (
         <div className="space-y-8">
           <section className="space-y-3">
-            <div className="flex flex-wrap items-end justify-between gap-3 border-b border-slate-200 pb-2">
+            <div className="flex flex-wrap items-end justify-between gap-3 border-b border-white/10 pb-2">
               <div>
-                <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Active Learning</p>
-                <h3 className="text-lg font-bold text-slate-900">Enrolled Modules</h3>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">Active Learning</p>
+                <h3 className="text-lg font-bold text-white">Enrolled Modules</h3>
               </div>
-              <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
+              <span className="rounded-full bg-brand-500/10 px-3 py-1 text-xs font-semibold text-brand-300">
                 {enrolledModules.length} total
               </span>
             </div>
 
             {enrolledModules.length === 0 ? (
-              <p className="rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-600 shadow-sm">
+              <p className="rounded-xl border border-white/10 bg-slate-900/70 p-4 text-sm text-slate-300 shadow-sm">
                 No enrolled modules found.
               </p>
             ) : (
               <div className="grid gap-5 lg:grid-cols-2 xl:grid-cols-3">
                 {enrolledModules.map((module) => (
-                  <article key={module.id} className="flex h-full flex-col rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                  <article key={module.id} className="flex h-full flex-col rounded-xl border border-white/10 bg-slate-900/70 p-5 shadow-sm">
                     <div className="flex-1">
                       <div className="mb-3 flex items-center justify-between gap-2">
-                        <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-slate-700">
+                        <span className="rounded-full bg-white/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-slate-200">
                           {module.category ?? 'General'}
                         </span>
-                        <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-emerald-700">
+                        <span className="rounded-full bg-brand-500/15 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-brand-300">
                           Enrolled
                         </span>
                       </div>
-                      <div className="mb-3 aspect-video w-full overflow-hidden rounded-md border border-slate-200 bg-slate-100">
+                      <div className="mb-3 aspect-video w-full overflow-hidden rounded-md border border-white/10 bg-white/10">
                         {module.thumbnail_url ? (
                           <img src={module.thumbnail_url} alt={module.title} className="h-full w-full object-contain" />
                         ) : (
@@ -181,16 +181,16 @@ export function UserModulesPage() {
                           </div>
                         )}
                       </div>
-                      <h3 className="min-h-[56px] text-lg font-bold leading-7 text-slate-900">{module.title}</h3>
-                      <p className="mt-2 min-h-[72px] max-h-[72px] overflow-hidden text-sm leading-6 text-slate-600">{module.description}</p>
-                      <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5">
+                      <h3 className="min-h-[56px] text-lg font-bold leading-7 text-white">{module.title}</h3>
+                      <p className="mt-2 min-h-[72px] max-h-[72px] overflow-hidden text-sm leading-6 text-slate-300">{module.description}</p>
+                      <div className="mt-4 rounded-lg border border-white/10 bg-white/5 px-3 py-2.5">
                         <div className="mb-1.5 flex items-center justify-between text-xs font-semibold">
-                          <span className="uppercase tracking-wider text-slate-500">Progress</span>
-                          <span className="text-emerald-700">{completionByModuleId[module.id] ?? 0}%</span>
+                          <span className="uppercase tracking-wider text-slate-400">Progress</span>
+                          <span className="text-brand-300">{completionByModuleId[module.id] ?? 0}%</span>
                         </div>
-                        <div className="h-2 overflow-hidden rounded-full bg-slate-200">
+                        <div className="h-2 overflow-hidden rounded-full bg-slate-800/70">
                           <div
-                            className="h-full rounded-full bg-emerald-500 transition-all"
+                            className="h-full rounded-full bg-brand-500 transition-all"
                             style={{ width: `${Math.max(0, Math.min(100, completionByModuleId[module.id] ?? 0))}%` }}
                           />
                         </div>
@@ -198,7 +198,7 @@ export function UserModulesPage() {
                     </div>
                     <button
                       onClick={() => openModule(module.id)}
-                      className="mt-5 w-full rounded-md bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-500"
+                      className="mt-5 w-full rounded-md bg-brand-600 px-3 py-2 text-sm font-semibold text-white hover:bg-brand-500"
                     >
                       Continue Module
                     </button>
@@ -209,18 +209,18 @@ export function UserModulesPage() {
           </section>
 
           <section className="space-y-3">
-            <div className="flex flex-wrap items-end justify-between gap-3 border-b border-slate-200 pb-2">
+            <div className="flex flex-wrap items-end justify-between gap-3 border-b border-white/10 pb-2">
               <div>
-                <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">Discover</p>
-                <h3 className="text-lg font-bold text-slate-900">Available Modules</h3>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">Discover</p>
+                <h3 className="text-lg font-bold text-white">Available Modules</h3>
               </div>
-              <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
+              <span className="rounded-full bg-white/10 px-3 py-1 text-xs font-semibold text-slate-200">
                 {notEnrolledModules.length} total
               </span>
             </div>
 
             {notEnrolledModules.length === 0 ? (
-              <p className="rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-600 shadow-sm">
+              <p className="rounded-xl border border-white/10 bg-slate-900/70 p-4 text-sm text-slate-300 shadow-sm">
                 No available modules found.
               </p>
             ) : (
@@ -228,7 +228,7 @@ export function UserModulesPage() {
                 <button
                   disabled={carouselStart <= 0}
                   onClick={() => setCarouselStart((previous) => Math.max(previous - 1, 0))}
-                  className="absolute -left-4 top-1/2 z-10 -translate-y-1/2 rounded-full border border-slate-200 bg-white/90 p-2 text-slate-700 shadow-lg shadow-slate-300/70 backdrop-blur-md disabled:cursor-not-allowed disabled:opacity-40"
+                  className="absolute -left-4 top-1/2 z-10 -translate-y-1/2 rounded-full border border-white/10 bg-slate-900/85 p-2 text-slate-200 shadow-lg shadow-slate-300/70 backdrop-blur-md disabled:cursor-not-allowed disabled:opacity-40"
                   aria-label="Previous modules"
                 >
                   <ChevronLeft size={18} />
@@ -236,25 +236,25 @@ export function UserModulesPage() {
                 <button
                   disabled={carouselStart >= maxCarouselStart}
                   onClick={() => setCarouselStart((previous) => Math.min(previous + 1, maxCarouselStart))}
-                  className="absolute -right-4 top-1/2 z-10 -translate-y-1/2 rounded-full border border-slate-200 bg-white/90 p-2 text-slate-700 shadow-lg shadow-slate-300/70 backdrop-blur-md disabled:cursor-not-allowed disabled:opacity-40"
+                  className="absolute -right-4 top-1/2 z-10 -translate-y-1/2 rounded-full border border-white/10 bg-slate-900/85 p-2 text-slate-200 shadow-lg shadow-slate-300/70 backdrop-blur-md disabled:cursor-not-allowed disabled:opacity-40"
                   aria-label="Next modules"
                 >
                   <ChevronRight size={18} />
                 </button>
                 <div className="flex gap-5 px-2">
                   {carouselModules.map((module) => (
-                    <article key={module.id} className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                    <article key={module.id} className="min-w-0 flex-1 rounded-xl border border-white/10 bg-slate-900/70 p-5 shadow-sm">
                       <div className="flex h-full flex-col">
                         <div className="flex-1">
                           <div className="mb-3 flex items-center justify-between gap-2">
-                            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-slate-700">
+                            <span className="rounded-full bg-white/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-slate-200">
                               {module.category ?? 'General'}
                             </span>
-                            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-slate-600">
+                            <span className="rounded-full bg-white/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-slate-300">
                               Available
                             </span>
                           </div>
-                          <div className="mb-3 aspect-video w-full overflow-hidden rounded-md border border-slate-200 bg-slate-100">
+                          <div className="mb-3 aspect-video w-full overflow-hidden rounded-md border border-white/10 bg-white/10">
                             {module.thumbnail_url ? (
                               <img src={module.thumbnail_url} alt={module.title} className="h-full w-full object-contain" />
                             ) : (
@@ -263,12 +263,12 @@ export function UserModulesPage() {
                               </div>
                             )}
                           </div>
-                          <h3 className="min-h-[56px] text-lg font-bold leading-7 text-slate-900">{module.title}</h3>
-                          <p className="mt-2 min-h-[72px] max-h-[72px] overflow-hidden text-sm leading-6 text-slate-600">{module.description}</p>
+                          <h3 className="min-h-[56px] text-lg font-bold leading-7 text-white">{module.title}</h3>
+                          <p className="mt-2 min-h-[72px] max-h-[72px] overflow-hidden text-sm leading-6 text-slate-300">{module.description}</p>
                         </div>
                         <button
                           onClick={() => setPendingStartModule(module)}
-                          className="mt-5 w-full rounded-md bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-500"
+                          className="mt-5 w-full rounded-md bg-brand-600 px-3 py-2 text-sm font-semibold text-white hover:bg-brand-500"
                         >
                           Start Module
                         </button>
@@ -284,17 +284,17 @@ export function UserModulesPage() {
 
       {pendingStartModule ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
-          <div className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-5 shadow-xl">
-            <h3 className="text-lg font-bold text-slate-900">Start Module</h3>
-            <p className="mt-2 text-sm text-slate-600">
-              Start <span className="font-semibold text-slate-900">{pendingStartModule.title}</span>? You will be enrolled and moved to the module viewer.
+          <div className="w-full max-w-md rounded-xl border border-white/10 bg-slate-900/70 p-5 shadow-xl">
+            <h3 className="text-lg font-bold text-white">Start Module</h3>
+            <p className="mt-2 text-sm text-slate-300">
+              Start <span className="font-semibold text-white">{pendingStartModule.title}</span>? You will be enrolled and moved to the module viewer.
             </p>
             <div className="mt-5 flex justify-end gap-2">
               <button
                 type="button"
                 disabled={isStartingModule}
                 onClick={() => setPendingStartModule(null)}
-                className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
+                className="rounded-md border border-white/20 px-4 py-2 text-sm font-semibold text-slate-200 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 Cancel
               </button>
@@ -302,7 +302,7 @@ export function UserModulesPage() {
                 type="button"
                 disabled={isStartingModule}
                 onClick={() => void handleConfirmStartModule()}
-                className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+                className="rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {isStartingModule ? 'Starting...' : 'Confirm Start'}
               </button>
@@ -313,3 +313,4 @@ export function UserModulesPage() {
     </section>
   );
 }
+

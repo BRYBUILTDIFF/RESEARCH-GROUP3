@@ -60,23 +60,23 @@ function toYouTubeEmbedUrl(url: string) {
 function ContentBlock({ block }: { block: LessonContentBlock }) {
   if (block.content_type === 'text') {
     return (
-      <article className="rounded-lg border border-slate-200 bg-white p-4">
-        <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Text Lesson</p>
-        <h4 className="mt-1 text-base font-semibold text-slate-900">{block.title}</h4>
-        <p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">{block.body_text || 'No text content provided.'}</p>
+      <article className="rounded-lg border border-white/10 bg-slate-900/70 p-4">
+        <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Text Lesson</p>
+        <h4 className="mt-1 text-base font-semibold text-white">{block.title}</h4>
+        <p className="mt-2 whitespace-pre-wrap text-sm text-slate-200">{block.body_text || 'No text content provided.'}</p>
       </article>
     );
   }
 
   if (block.content_type === 'image') {
     return (
-      <article className="rounded-lg border border-slate-200 bg-white p-4">
-        <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Image</p>
-        <h4 className="mt-1 text-base font-semibold text-slate-900">{block.title}</h4>
+      <article className="rounded-lg border border-white/10 bg-slate-900/70 p-4">
+        <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Image</p>
+        <h4 className="mt-1 text-base font-semibold text-white">{block.title}</h4>
         {block.content_url ? (
-          <img src={block.content_url} alt={block.title} className="mt-3 w-full rounded-md border border-slate-200 object-cover" />
+          <img src={block.content_url} alt={block.title} className="mt-3 w-full rounded-md border border-white/10 object-cover" />
         ) : (
-          <p className="mt-2 text-sm text-slate-600">No image URL configured.</p>
+          <p className="mt-2 text-sm text-slate-300">No image URL configured.</p>
         )}
       </article>
     );
@@ -85,11 +85,11 @@ function ContentBlock({ block }: { block: LessonContentBlock }) {
   if (block.content_type === 'video') {
     const embedUrl = block.content_url ? toYouTubeEmbedUrl(block.content_url) : null;
     return (
-      <article className="rounded-lg border border-slate-200 bg-white p-4">
-        <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Video</p>
-        <h4 className="mt-1 text-base font-semibold text-slate-900">{block.title}</h4>
+      <article className="rounded-lg border border-white/10 bg-slate-900/70 p-4">
+        <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Video</p>
+        <h4 className="mt-1 text-base font-semibold text-white">{block.title}</h4>
         {embedUrl ? (
-          <div className="mt-3 aspect-video overflow-hidden rounded-md border border-slate-200">
+          <div className="mt-3 aspect-video overflow-hidden rounded-md border border-white/10">
             <iframe
               src={embedUrl}
               title={block.title}
@@ -100,11 +100,11 @@ function ContentBlock({ block }: { block: LessonContentBlock }) {
             />
           </div>
         ) : block.content_url ? (
-          <video controls className="mt-3 w-full rounded-md border border-slate-200">
+          <video controls className="mt-3 w-full rounded-md border border-white/10">
             <source src={block.content_url} />
           </video>
         ) : (
-          <p className="mt-2 text-sm text-slate-600">No video URL configured.</p>
+          <p className="mt-2 text-sm text-slate-300">No video URL configured.</p>
         )}
       </article>
     );
@@ -112,16 +112,16 @@ function ContentBlock({ block }: { block: LessonContentBlock }) {
 
   if (block.content_type === 'simulation') {
     return (
-      <article className="rounded-lg border border-emerald-200 bg-emerald-50/60 p-4">
-        <p className="text-xs font-semibold uppercase tracking-wider text-emerald-700">Simulation</p>
-        <h4 className="mt-1 text-base font-semibold text-slate-900">{block.title}</h4>
-        <p className="mt-2 text-sm text-slate-700">{block.body_text || 'Complete this interactive scenario to practice troubleshooting.'}</p>
+      <article className="rounded-lg border border-brand-500/30 bg-brand-500/10 p-4">
+        <p className="text-xs font-semibold uppercase tracking-wider text-brand-300">Simulation</p>
+        <h4 className="mt-1 text-base font-semibold text-white">{block.title}</h4>
+        <p className="mt-2 text-sm text-slate-200">{block.body_text || 'Complete this interactive scenario to practice troubleshooting.'}</p>
         {block.content_url ? (
           <a
             href={block.content_url}
             target="_blank"
             rel="noreferrer"
-            className="mt-3 inline-flex rounded-md bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-500"
+            className="mt-3 inline-flex rounded-md bg-brand-600 px-3 py-2 text-sm font-semibold text-white hover:bg-brand-500"
           >
             Open Simulation
           </a>
@@ -131,15 +131,15 @@ function ContentBlock({ block }: { block: LessonContentBlock }) {
   }
 
   return (
-    <article className="rounded-lg border border-slate-200 bg-white p-4">
-      <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Download</p>
-      <h4 className="mt-1 text-base font-semibold text-slate-900">{block.title}</h4>
+    <article className="rounded-lg border border-white/10 bg-slate-900/70 p-4">
+      <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Download</p>
+      <h4 className="mt-1 text-base font-semibold text-white">{block.title}</h4>
       {block.content_url ? (
-        <a href={block.content_url} target="_blank" rel="noreferrer" className="mt-3 inline-flex text-sm font-semibold text-sky-700 hover:underline">
+        <a href={block.content_url} target="_blank" rel="noreferrer" className="mt-3 inline-flex text-sm font-semibold text-brand-300 hover:underline">
           Open Resource
         </a>
       ) : (
-        <p className="mt-2 text-sm text-slate-600">No file URL configured.</p>
+        <p className="mt-2 text-sm text-slate-300">No file URL configured.</p>
       )}
     </article>
   );
@@ -155,9 +155,9 @@ const assessmentMeta = (quiz: QuizSummary) => {
     return {
       label: 'Final Exam',
       icon: Award,
-      accent: 'text-slate-700',
-      surface: 'bg-slate-100',
-      border: 'border-slate-200',
+      accent: 'text-slate-200',
+      surface: 'bg-white/10',
+      border: 'border-white/10',
       buttonClass: 'bg-slate-900',
       cta: 'Take Final Exam',
     };
@@ -166,9 +166,9 @@ const assessmentMeta = (quiz: QuizSummary) => {
     return {
       label: 'Pre Test',
       icon: ClipboardList,
-      accent: 'text-slate-700',
-      surface: 'bg-slate-100',
-      border: 'border-slate-200',
+      accent: 'text-slate-200',
+      surface: 'bg-white/10',
+      border: 'border-white/10',
       buttonClass: 'bg-slate-900',
       cta: 'Take Pre Test',
     };
@@ -176,9 +176,9 @@ const assessmentMeta = (quiz: QuizSummary) => {
   return {
     label: 'Post Test',
     icon: CirclePlay,
-    accent: 'text-slate-700',
-    surface: 'bg-slate-100',
-    border: 'border-slate-200',
+    accent: 'text-slate-200',
+    surface: 'bg-white/10',
+    border: 'border-white/10',
     buttonClass: 'bg-slate-900',
     cta: 'Take Post Test',
   };
@@ -695,7 +695,7 @@ export function ModuleViewerPage() {
   return (
     <section className="space-y-4">
       {error ? <p className="rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{error}</p> : null}
-      {isLoading ? <p className="text-sm text-slate-500">Loading module content...</p> : null}
+      {isLoading ? <p className="text-sm text-slate-400">Loading module content...</p> : null}
 
       {!isLoading ? (
         <div
@@ -704,29 +704,29 @@ export function ModuleViewerPage() {
           }`}
         >
           {isLessonsSidebarOpen ? (
-            <aside className="h-full space-y-2 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">
+            <aside className="h-full space-y-2 rounded-xl border border-white/10 bg-slate-900/70 p-4 shadow-sm">
+              <div className="rounded-lg border border-white/10 bg-white/5 p-3">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">
                   Module {moduleIdNumber || '--'}
                 </p>
-                <p className="mt-1 text-sm font-semibold text-slate-900">{moduleTitle || 'Untitled Module'}</p>
-                <div className="mt-2 flex items-center justify-between text-[11px] text-slate-500">
+                <p className="mt-1 text-sm font-semibold text-white">{moduleTitle || 'Untitled Module'}</p>
+                <div className="mt-2 flex items-center justify-between text-[11px] text-slate-400">
                   <span>Progress</span>
-                  <span className="font-semibold text-sky-700">{completionPercent}%</span>
+                  <span className="font-semibold text-brand-300">{completionPercent}%</span>
                 </div>
-                <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-200">
+                <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-800/70">
                   <div
-                    className="h-full rounded-full bg-sky-500"
+                    className="h-full rounded-full bg-brand-500"
                     style={{ width: `${Math.max(0, Math.min(100, completionPercent))}%` }}
                   />
                 </div>
               </div>
 
               <div className="mb-1 flex items-center justify-between">
-                <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Learning Sequence</p>
+                <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Learning Sequence</p>
                 <button
                   onClick={() => setIsLessonsSidebarOpen(false)}
-                  className="rounded-md border border-slate-300 p-1 text-slate-600 hover:bg-slate-50"
+                  className="rounded-md border border-white/20 p-1 text-slate-300 hover:bg-white/5"
                   aria-label="Collapse lessons sidebar"
                 >
                   <PanelLeftClose size={14} />
@@ -749,11 +749,11 @@ export function ModuleViewerPage() {
                           disabled={isQuizOngoing && quizInProgressId !== quiz.id}
                           onClick={() => selectAssessment(quiz)}
                           className={`w-full rounded-md border px-3 py-2 text-left text-sm disabled:cursor-not-allowed disabled:opacity-60 ${
-                            selectedAssessmentId === quiz.id ? 'border-slate-300 bg-slate-50' : 'border-slate-200 bg-white'
+                            selectedAssessmentId === quiz.id ? 'border-white/20 bg-white/5' : 'border-white/10 bg-slate-900/70'
                           }`}
                         >
-                          <p className="font-semibold text-slate-900">Pre Test: {quiz.title}</p>
-                          <p className="mt-1 text-xs text-slate-600">
+                          <p className="font-semibold text-white">Pre Test: {quiz.title}</p>
+                          <p className="mt-1 text-xs text-slate-300">
                             {latest ? `Latest ${Number(latest.score)}% (${latest.passed ? 'Passed' : 'Failed'})` : 'No attempts yet'}
                           </p>
                         </button>
@@ -764,22 +764,22 @@ export function ModuleViewerPage() {
                       disabled={!lessonUnlocked || isQuizOngoing}
                       onClick={() => selectLesson(lesson.id)}
                       className={`w-full rounded-md border px-3 py-2 text-left text-sm disabled:cursor-not-allowed disabled:opacity-60 ${
-                        selectedAssessmentId === null && selectedLessonId === lesson.id ? 'border-emerald-300 bg-emerald-50' : 'border-slate-200 bg-white'
+                        selectedAssessmentId === null && selectedLessonId === lesson.id ? 'border-brand-500/40 bg-brand-500/10' : 'border-white/10 bg-slate-900/70'
                       }`}
                     >
                       <div className="flex items-start gap-2">
                         <span
                           className={`mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full border ${
-                            lesson.completed ? 'border-emerald-600 bg-emerald-600 text-white' : 'border-slate-400 bg-white text-slate-400'
+                            lesson.completed ? 'border-brand-500 bg-brand-600 text-white' : 'border-slate-400 bg-slate-900/70 text-slate-400'
                           }`}
                           aria-hidden="true"
                         >
                           {lesson.completed ? <Check size={12} strokeWidth={3} /> : null}
                         </span>
                         <div>
-                          <p className="font-semibold text-slate-900">{lesson.title}</p>
-                          <p className="mt-1 text-xs text-slate-600">Estimated time: {formatMinutesLabel(lesson.estimated_minutes)}</p>
-                          <p className="mt-2 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                          <p className="font-semibold text-white">{lesson.title}</p>
+                          <p className="mt-1 text-xs text-slate-300">Estimated time: {formatMinutesLabel(lesson.estimated_minutes)}</p>
+                          <p className="mt-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
                             {lesson.completed ? 'Completed' : lessonUnlocked ? 'Unlocked' : 'Locked'}
                           </p>
                         </div>
@@ -797,14 +797,14 @@ export function ModuleViewerPage() {
                               onClick={() => selectTopic(lesson.id, topic.id)}
                               className={`w-full rounded-md border px-3 py-2 text-left text-xs disabled:cursor-not-allowed disabled:opacity-60 ${
                                 selectedAssessmentId === null && selectedTopicId === topic.id
-                                  ? 'border-emerald-300 bg-emerald-50 text-emerald-800'
-                                  : 'border-slate-200 bg-white text-slate-700'
+                                  ? 'border-brand-500/40 bg-brand-500/10 text-brand-200'
+                                  : 'border-white/10 bg-slate-900/70 text-slate-200'
                               }`}
                             >
                               <div className="flex items-start gap-2">
                                 <span
                                   className={`mt-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full border ${
-                                    topicCompleted ? 'border-emerald-600 bg-emerald-600 text-white' : 'border-slate-400 bg-white text-slate-400'
+                                    topicCompleted ? 'border-brand-500 bg-brand-600 text-white' : 'border-slate-400 bg-slate-900/70 text-slate-400'
                                   }`}
                                   aria-hidden="true"
                                 >
@@ -816,7 +816,7 @@ export function ModuleViewerPage() {
                           );
                         })}
                         {lessonTopics.length === 0 ? (
-                          <p className="rounded-md border border-slate-200 bg-white px-3 py-2 text-xs text-slate-500">
+                          <p className="rounded-md border border-white/10 bg-slate-900/70 px-3 py-2 text-xs text-slate-400">
                             No topics in this lesson yet.
                           </p>
                         ) : null}
@@ -831,11 +831,11 @@ export function ModuleViewerPage() {
                           disabled={isQuizOngoing && quizInProgressId !== quiz.id}
                           onClick={() => selectAssessment(quiz)}
                           className={`w-full rounded-md border px-3 py-2 text-left text-sm disabled:cursor-not-allowed disabled:opacity-60 ${
-                            selectedAssessmentId === quiz.id ? 'border-slate-300 bg-slate-50' : 'border-slate-200 bg-white'
+                            selectedAssessmentId === quiz.id ? 'border-white/20 bg-white/5' : 'border-white/10 bg-slate-900/70'
                           }`}
                         >
-                          <p className="font-semibold text-slate-900">Post Test: {quiz.title}</p>
-                          <p className="mt-1 text-xs text-slate-600">
+                          <p className="font-semibold text-white">Post Test: {quiz.title}</p>
+                          <p className="mt-1 text-xs text-slate-300">
                             {latest ? `Latest ${Number(latest.score)}% (${latest.passed ? 'Passed' : 'Failed'})` : 'No attempts yet'}
                           </p>
                         </button>
@@ -850,11 +850,11 @@ export function ModuleViewerPage() {
                   disabled={isQuizOngoing && quizInProgressId !== finalExam.id}
                   onClick={() => selectAssessment(finalExam)}
                   className={`mt-1 w-full rounded-md border px-3 py-2 text-left text-sm disabled:cursor-not-allowed disabled:opacity-60 ${
-                    selectedAssessmentId === finalExam.id ? 'border-slate-300 bg-slate-50' : 'border-slate-200 bg-white'
+                    selectedAssessmentId === finalExam.id ? 'border-white/20 bg-white/5' : 'border-white/10 bg-slate-900/70'
                   }`}
                 >
-                  <p className="font-semibold text-slate-900">Final Exam: {finalExam.title}</p>
-                  <p className="mt-1 text-xs text-slate-600">{assessmentUnlockMessage(finalExam)}</p>
+                  <p className="font-semibold text-white">Final Exam: {finalExam.title}</p>
+                  <p className="mt-1 text-xs text-slate-300">{assessmentUnlockMessage(finalExam)}</p>
                 </button>
               ) : null}
             </aside>
@@ -865,7 +865,7 @@ export function ModuleViewerPage() {
             {!isLessonsSidebarOpen ? (
               <button
                 onClick={() => setIsLessonsSidebarOpen(true)}
-                className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                className="inline-flex items-center gap-2 rounded-md border border-white/20 bg-slate-900/70 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-white/5"
               >
                 <PanelLeftOpen size={14} />
                 Show Sequence
@@ -875,32 +875,32 @@ export function ModuleViewerPage() {
             {selectedAssessment ? (
               <div className="flex flex-1 min-h-0 items-stretch py-2">
                 {isQuizLoading ? (
-                  <article className="flex h-full w-full items-center justify-center rounded-2xl border border-slate-200 bg-white p-6 shadow-sm md:p-8">
-                    <p className="text-sm text-slate-600">Preparing assessment...</p>
+                  <article className="flex h-full w-full items-center justify-center rounded-2xl border border-white/10 bg-slate-900/70 p-6 shadow-sm md:p-8">
+                    <p className="text-sm text-slate-300">Preparing assessment...</p>
                   </article>
                 ) : isResultProcessing ? (
                   <article className="w-full overflow-hidden rounded-2xl border border-slate-700 bg-slate-950 shadow-sm">
                     <div className="grid h-full min-h-[620px] lg:grid-cols-[1fr_420px]">
-                      <div className="flex flex-col justify-center p-8 text-emerald-200">
+                      <div className="flex flex-col justify-center p-8 text-brand-100">
                         <div className="mx-auto w-full max-w-2xl text-center">
-                          <div className="inline-flex items-center gap-2 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-3 py-1 text-xs font-semibold uppercase tracking-wider">
+                          <div className="inline-flex items-center gap-2 rounded-full border border-brand-500/40 bg-brand-500/10 px-3 py-1 text-xs font-semibold uppercase tracking-wider">
                             <CircleDotDashed size={14} className="animate-spin" />
                             Validating Assessment
                           </div>
                           <h3 className="mt-4 text-2xl font-bold text-white md:text-3xl">Running Answer Integrity Checks</h3>
-                          <p className="mt-3 text-sm text-emerald-200/90">
+                          <p className="mt-3 text-sm text-brand-100/90">
                             Please wait while the system verifies all submitted responses and computes your final score.
                           </p>
                         </div>
                       </div>
-                      <aside className="border-t border-slate-700 bg-black/40 p-5 font-mono text-xs text-emerald-200 lg:border-l lg:border-t-0">
-                        <div className="mb-4 flex items-center gap-2 border-b border-white/10 pb-3 text-emerald-300">
+                      <aside className="border-t border-slate-700 bg-black/40 p-5 font-mono text-xs text-brand-100 lg:border-l lg:border-t-0">
+                        <div className="mb-4 flex items-center gap-2 border-b border-white/10 pb-3 text-brand-300">
                           <Cpu size={14} />
                           <span className="uppercase tracking-wider">Assessment Terminal</span>
                         </div>
                         <div ref={terminalLogBoxRef} className="space-y-2 overflow-hidden">
                           {quizTerminalLogs.map((log, index) => (
-                            <p key={`${log}-${index}`} className="leading-relaxed text-emerald-200/90">
+                            <p key={`${log}-${index}`} className="leading-relaxed text-brand-100/90">
                               {log}
                             </p>
                           ))}
@@ -911,7 +911,7 @@ export function ModuleViewerPage() {
                 ) : selectedAssessmentSessionResult ? (
                   <article className="w-full overflow-hidden rounded-2xl border border-slate-700 bg-slate-950 shadow-sm">
                     <div className="grid h-full min-h-[620px] lg:grid-cols-[1fr_420px]">
-                      <div className="flex flex-col justify-center p-8 text-emerald-200">
+                      <div className="flex flex-col justify-center p-8 text-brand-100">
                       {(() => {
                         const score = Math.max(0, Math.min(100, Number(selectedAssessmentSessionResult.score)));
                         const radius = 56;
@@ -920,7 +920,7 @@ export function ModuleViewerPage() {
                         const passed = selectedAssessmentSessionResult.passed;
                         return (
                           <div className="mx-auto w-full max-w-2xl text-center">
-                            <p className="text-xs font-semibold uppercase tracking-wider text-emerald-300">Assessment Result</p>
+                            <p className="text-xs font-semibold uppercase tracking-wider text-brand-300">Assessment Result</p>
                             <h3 className="mt-2 text-2xl font-bold text-white md:text-3xl">{selectedAssessment.title}</h3>
                             <div className="mt-6 flex justify-center">
                               <div className="relative inline-flex items-center justify-center">
@@ -940,21 +940,21 @@ export function ModuleViewerPage() {
                                 </svg>
                                 <div className="absolute text-center">
                                   <p className="text-3xl font-bold text-white">{score.toFixed(0)}%</p>
-                                  <p className="text-xs font-semibold uppercase tracking-wider text-emerald-300/80">Score</p>
+                                  <p className="text-xs font-semibold uppercase tracking-wider text-brand-300/80">Score</p>
                                 </div>
                               </div>
                             </div>
-                            <div className="mt-5 inline-flex items-center gap-2 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-sm font-semibold text-emerald-200">
-                              {passed ? <CheckCircle2 size={16} className="text-emerald-300" /> : <XCircle size={16} className="text-rose-300" />}
+                            <div className="mt-5 inline-flex items-center gap-2 rounded-full border border-brand-500/30 bg-brand-500/10 px-3 py-1.5 text-sm font-semibold text-brand-100">
+                              {passed ? <CheckCircle2 size={16} className="text-brand-300" /> : <XCircle size={16} className="text-rose-300" />}
                               {passed ? 'Passed' : 'Failed'} - Attempt #{selectedAssessmentSessionResult.attempt_no}
                             </div>
                             <div className="mx-auto mt-5 grid max-w-md grid-cols-2 gap-3 text-left">
                               <div className="rounded-lg border border-white/10 bg-white/5 p-3">
-                                <p className="text-[11px] uppercase tracking-wider text-emerald-300/80">Passing Score</p>
+                                <p className="text-[11px] uppercase tracking-wider text-brand-300/80">Passing Score</p>
                                 <p className="mt-1 text-lg font-semibold text-white">{selectedAssessment.passing_score}%</p>
                               </div>
                               <div className="rounded-lg border border-white/10 bg-white/5 p-3">
-                                <p className="text-[11px] uppercase tracking-wider text-emerald-300/80">Time Limit</p>
+                                <p className="text-[11px] uppercase tracking-wider text-brand-300/80">Time Limit</p>
                                 <p className="mt-1 text-lg font-semibold text-white">{selectedAssessment.time_limit_minutes} min</p>
                               </div>
                             </div>
@@ -965,7 +965,7 @@ export function ModuleViewerPage() {
                           <button
                             type="button"
                             onClick={() => setQuizSessionResult(null)}
-                            className="rounded-md border border-white/20 px-4 py-2 text-sm font-semibold text-emerald-100 hover:bg-white/5"
+                            className="rounded-md border border-white/20 px-4 py-2 text-sm font-semibold text-brand-100 hover:bg-white/5"
                           >
                             Close Result
                           </button>
@@ -973,20 +973,20 @@ export function ModuleViewerPage() {
                             type="button"
                             disabled={!isAssessmentUnlocked(selectedAssessment) || selectedAssessmentAttemptsRemaining <= 0}
                             onClick={() => void handleStartQuiz(selectedAssessment)}
-                            className="rounded-md bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-900 disabled:cursor-not-allowed disabled:opacity-60"
+                            className="rounded-md bg-brand-500 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
                           >
                             {selectedAssessmentAttemptsRemaining > 0 ? 'Retake Assessment' : 'No Attempts Remaining'}
                           </button>
                         </div>
                       </div>
-                      <aside className="border-t border-slate-700 bg-black/40 p-5 font-mono text-xs text-emerald-200 lg:border-l lg:border-t-0">
-                        <div className="mb-4 flex items-center gap-2 border-b border-white/10 pb-3 text-emerald-300">
+                      <aside className="border-t border-slate-700 bg-black/40 p-5 font-mono text-xs text-brand-100 lg:border-l lg:border-t-0">
+                        <div className="mb-4 flex items-center gap-2 border-b border-white/10 pb-3 text-brand-300">
                           <Cpu size={14} />
                           <span className="uppercase tracking-wider">Assessment Terminal</span>
                         </div>
                         <div ref={terminalLogBoxRef} className="space-y-2 overflow-hidden">
                           {quizTerminalLogs.map((log, index) => (
-                            <p key={`${log}-${index}`} className="leading-relaxed text-emerald-200/90">
+                            <p key={`${log}-${index}`} className="leading-relaxed text-brand-100/90">
                               {log}
                             </p>
                           ))}
@@ -995,23 +995,23 @@ export function ModuleViewerPage() {
                     </div>
                   </article>
                 ) : isSelectedAssessmentOngoing ? (
-                  <article className="w-full overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                  <article className="w-full overflow-hidden rounded-2xl border border-white/10 bg-slate-900/70 shadow-sm">
                     <div className="grid h-full min-h-[620px] lg:grid-cols-[1fr_420px]">
                       <div className="flex h-full p-6 md:p-8">
                         <div className="mx-auto flex h-full w-full max-w-4xl flex-col">
                           <div className="flex flex-wrap items-center justify-between gap-2">
-                            <div className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-xs font-semibold uppercase tracking-wider text-slate-700">
+                            <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/10 px-3 py-1 text-xs font-semibold uppercase tracking-wider text-slate-200">
                               <HelpCircle size={14} />
                               Question {quizCurrentIndex + 1} of {quizQuestions.length}
                             </div>
-                            <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                            <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
                               Submitted {submittedQuestionsCount} / {quizQuestions.length}
                             </p>
                           </div>
                           {currentQuizQuestion ? (
                             <>
                               <div className="mt-6 flex flex-1 flex-col">
-                                <h3 className="text-2xl font-bold leading-tight text-slate-900 md:text-3xl">{currentQuizQuestion.prompt}</h3>
+                                <h3 className="text-2xl font-bold leading-tight text-white md:text-3xl">{currentQuizQuestion.prompt}</h3>
                                 <div className="mt-7 grid gap-3">
                                   {currentQuizQuestion.answers.map((answer) => (
                                     <button
@@ -1025,17 +1025,17 @@ export function ModuleViewerPage() {
                                         }))
                                       }
                                       className={`flex w-full items-center justify-between rounded-lg border px-5 py-4 text-left text-base font-medium disabled:cursor-not-allowed disabled:opacity-70 ${
-                                        currentQuizAnswerId === answer.id ? 'border-slate-400 bg-slate-50' : 'border-slate-200 bg-white hover:bg-slate-50'
+                                        currentQuizAnswerId === answer.id ? 'border-slate-400 bg-white/5' : 'border-white/10 bg-slate-900/70 hover:bg-white/5'
                                       }`}
                                     >
                                       <span>{answer.answer_text}</span>
-                                      {currentQuizAnswerId === answer.id ? <CheckCircle2 size={18} className="text-emerald-600" /> : null}
+                                      {currentQuizAnswerId === answer.id ? <CheckCircle2 size={18} className="text-brand-400" /> : null}
                                     </button>
                                   ))}
                                 </div>
                               </div>
-                              <div className="mt-auto flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 pt-6">
-                                <p className="text-sm text-slate-500">
+                              <div className="mt-auto flex flex-wrap items-center justify-between gap-3 border-t border-white/10 pt-6">
+                                <p className="text-sm text-slate-400">
                                   {isCurrentQuestionSubmitted
                                     ? 'Answer submitted.'
                                     : 'Submit this answer to proceed to the next question.'}
@@ -1051,20 +1051,20 @@ export function ModuleViewerPage() {
                               </div>
                             </>
                           ) : (
-                            <div className="mt-6 rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
+                            <div className="mt-6 rounded-lg border border-white/10 bg-white/5 p-4 text-sm text-slate-300">
                               No questions available for this assessment.
                             </div>
                           )}
                         </div>
                       </div>
-                      <aside className="border-t border-slate-700 bg-slate-950 p-5 font-mono text-xs text-emerald-200 lg:border-l lg:border-t-0">
-                        <div className="mb-4 flex items-center gap-2 border-b border-white/10 pb-3 text-emerald-300">
+                      <aside className="border-t border-slate-700 bg-slate-950 p-5 font-mono text-xs text-brand-100 lg:border-l lg:border-t-0">
+                        <div className="mb-4 flex items-center gap-2 border-b border-white/10 pb-3 text-brand-300">
                           <Cpu size={14} />
                           <span className="uppercase tracking-wider">Live Terminal</span>
                         </div>
                         <div ref={terminalLogBoxRef} className="space-y-2 overflow-hidden">
                           {quizTerminalLogs.map((log, index) => (
-                            <p key={`${log}-${index}`} className="leading-relaxed text-emerald-200/90">
+                            <p key={`${log}-${index}`} className="leading-relaxed text-brand-100/90">
                               {log}
                             </p>
                           ))}
@@ -1077,53 +1077,53 @@ export function ModuleViewerPage() {
                     const meta = assessmentMeta(selectedAssessment);
                     const AssessmentIcon = meta.icon;
                     return (
-                      <article className={`flex h-full w-full flex-col rounded-2xl border bg-white p-6 shadow-sm md:p-8 ${meta.border}`}>
+                      <article className={`flex h-full w-full flex-col rounded-2xl border bg-slate-900/70 p-6 shadow-sm md:p-8 ${meta.border}`}>
                         <div className="flex flex-1 flex-col justify-center">
                           <div className="mx-auto w-full max-w-3xl text-center">
                             <div className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-wider ${meta.surface} ${meta.border} ${meta.accent}`}>
                               <AssessmentIcon size={14} />
                               {meta.label}
                             </div>
-                            <h3 className="mt-3 text-2xl font-bold text-slate-900 md:text-3xl">{selectedAssessment.title}</h3>
-                            <p className="mt-3 text-sm text-slate-600 md:text-base">{assessmentUnlockMessage(selectedAssessment)}</p>
+                            <h3 className="mt-3 text-2xl font-bold text-white md:text-3xl">{selectedAssessment.title}</h3>
+                            <p className="mt-3 text-sm text-slate-300 md:text-base">{assessmentUnlockMessage(selectedAssessment)}</p>
                           </div>
 
                           <div className="mx-auto mt-7 grid w-full max-w-4xl gap-3 sm:grid-cols-3">
-                            <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-center">
-                              <div className="mb-1 inline-flex text-slate-500">
+                            <div className="rounded-lg border border-white/10 bg-white/5 p-4 text-center">
+                              <div className="mb-1 inline-flex text-slate-400">
                                 <Award size={16} />
                               </div>
-                              <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Passing Score</p>
-                              <p className="mt-1 text-lg font-bold text-slate-900">{selectedAssessment.passing_score}%</p>
+                              <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Passing Score</p>
+                              <p className="mt-1 text-lg font-bold text-white">{selectedAssessment.passing_score}%</p>
                             </div>
-                            <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-center">
-                              <div className="mb-1 inline-flex text-slate-500">
+                            <div className="rounded-lg border border-white/10 bg-white/5 p-4 text-center">
+                              <div className="mb-1 inline-flex text-slate-400">
                                 <Timer size={16} />
                               </div>
-                              <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Time Limit</p>
-                              <p className="mt-1 text-lg font-bold text-slate-900">{selectedAssessment.time_limit_minutes} min</p>
+                              <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Time Limit</p>
+                              <p className="mt-1 text-lg font-bold text-white">{selectedAssessment.time_limit_minutes} min</p>
                             </div>
-                            <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-center">
-                              <div className="mb-1 inline-flex text-slate-500">
+                            <div className="rounded-lg border border-white/10 bg-white/5 p-4 text-center">
+                              <div className="mb-1 inline-flex text-slate-400">
                                 <ClipboardList size={16} />
                               </div>
-                              <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Attempts</p>
-                              <p className="mt-1 text-lg font-bold text-slate-900">{selectedAssessment.attempt_limit}</p>
+                              <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Attempts</p>
+                              <p className="mt-1 text-lg font-bold text-white">{selectedAssessment.attempt_limit}</p>
                             </div>
                           </div>
 
                           <div className="mx-auto mt-6 max-w-2xl text-center">
-                            <p className="text-sm text-slate-600">
+                            <p className="text-sm text-slate-300">
                               Attempts used: {selectedAssessmentAttemptCount} / {selectedAssessment.attempt_limit} | Remaining:{' '}
                               {selectedAssessmentAttemptsRemaining}
                             </p>
                             {latestResultByQuizId.get(selectedAssessment.id) ? (
-                              <p className="mt-1 text-sm text-slate-600">
+                              <p className="mt-1 text-sm text-slate-300">
                                 Latest result: {Number(latestResultByQuizId.get(selectedAssessment.id)?.score)}% (
                                 {latestResultByQuizId.get(selectedAssessment.id)?.passed ? 'Passed' : 'Failed'})
                               </p>
                             ) : (
-                              <p className="mt-1 text-sm text-slate-500">No attempts yet.</p>
+                              <p className="mt-1 text-sm text-slate-400">No attempts yet.</p>
                             )}
                           </div>
                         </div>
@@ -1150,18 +1150,18 @@ export function ModuleViewerPage() {
                 )}
               </div>
             ) : !selectedLesson ? (
-              <div className="rounded-xl border border-slate-200 bg-white p-5 text-sm text-slate-600 shadow-sm">
+              <div className="rounded-xl border border-white/10 bg-slate-900/70 p-5 text-sm text-slate-300 shadow-sm">
                 Select a lesson and topic from the sidebar.
               </div>
             ) : selectedTopic ? (
               <>
-                <article className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-                  <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                <article className="rounded-xl border border-white/10 bg-slate-900/70 p-5 shadow-sm">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
                     Topic {selectedTopic.sort_order}
                   </p>
-                  <h3 className="text-xl font-bold text-slate-900">{selectedTopic.title}</h3>
-                  {selectedTopic.summary ? <p className="mt-2 text-sm text-slate-600">{selectedTopic.summary}</p> : null}
-                  <p className="mt-2 text-xs text-slate-500">
+                  <h3 className="text-xl font-bold text-white">{selectedTopic.title}</h3>
+                  {selectedTopic.summary ? <p className="mt-2 text-sm text-slate-300">{selectedTopic.summary}</p> : null}
+                  <p className="mt-2 text-xs text-slate-400">
                     Lesson {selectedLesson.sequence_no}: {selectedLesson.title}
                   </p>
                 </article>
@@ -1174,7 +1174,7 @@ export function ModuleViewerPage() {
                       </div>
                     ))
                   ) : (
-                    <div className="rounded-xl border border-slate-200 bg-white p-5 text-sm text-slate-600 shadow-sm">
+                    <div className="rounded-xl border border-white/10 bg-slate-900/70 p-5 text-sm text-slate-300 shadow-sm">
                       No content blocks yet for this topic.
                     </div>
                   )}
@@ -1182,20 +1182,20 @@ export function ModuleViewerPage() {
               </>
             ) : (
               <>
-                <article className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                <article className="rounded-xl border border-white/10 bg-slate-900/70 p-5 shadow-sm">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
-                      <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Lesson {selectedLesson.sequence_no}</p>
-                      <h3 className="text-xl font-bold text-slate-900">{selectedLesson.title}</h3>
-                      <p className="mt-2 text-sm text-slate-600">{selectedLesson.summary || 'No summary provided.'}</p>
-                      <p className="mt-2 text-xs text-slate-500">
+                      <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Lesson {selectedLesson.sequence_no}</p>
+                      <h3 className="text-xl font-bold text-white">{selectedLesson.title}</h3>
+                      <p className="mt-2 text-sm text-slate-300">{selectedLesson.summary || 'No summary provided.'}</p>
+                      <p className="mt-2 text-xs text-slate-400">
                         Estimated time: {formatMinutesLabel(selectedLesson.estimated_minutes)}
                       </p>
                       {(selectedLesson.overview_image_url ?? '').trim() ? (
-                        <img src={selectedLesson.overview_image_url} alt={selectedLesson.title} className="mt-3 h-44 w-full max-w-3xl rounded-md border border-slate-200 object-cover" />
+                        <img src={selectedLesson.overview_image_url} alt={selectedLesson.title} className="mt-3 h-44 w-full max-w-3xl rounded-md border border-white/10 object-cover" />
                       ) : null}
                       {(selectedLesson.overview_text ?? '').trim() ? (
-                        <p className="mt-3 whitespace-pre-wrap text-sm text-slate-700">{selectedLesson.overview_text}</p>
+                        <p className="mt-3 whitespace-pre-wrap text-sm text-slate-200">{selectedLesson.overview_text}</p>
                       ) : null}
                     </div>
                     <button
@@ -1216,7 +1216,7 @@ export function ModuleViewerPage() {
                       </div>
                     ))
                   ) : (
-                    <div className="rounded-xl border border-slate-200 bg-white p-5 text-sm text-slate-600 shadow-sm">
+                    <div className="rounded-xl border border-white/10 bg-slate-900/70 p-5 text-sm text-slate-300 shadow-sm">
                       No lesson-level content blocks yet for this lesson.
                     </div>
                   )}
@@ -1225,17 +1225,17 @@ export function ModuleViewerPage() {
             )}
             </div>
             {currentSequenceIndex >= 0 ? (
-              <article className="mt-auto rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+              <article className="mt-auto rounded-xl border border-white/10 bg-slate-900/70 p-5 shadow-sm">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <button
                     disabled={!previousSequenceItem || isQuizOngoing}
                     onClick={() => goToSequenceItem(previousSequenceItem)}
-                    className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="inline-flex items-center gap-2 rounded-md border border-white/20 px-3 py-2 text-sm font-semibold text-slate-200 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     <ChevronLeft size={16} />
                     Previous
                   </button>
-                  <span className="text-xs text-slate-500">
+                  <span className="text-xs text-slate-400">
                     Sequence {currentSequenceIndex + 1} of {sequenceItems.length}
                   </span>
                   <button
@@ -1248,7 +1248,7 @@ export function ModuleViewerPage() {
                   </button>
                 </div>
                 {isQuizOngoing ? (
-                  <p className="mt-2 text-center text-xs text-slate-500">
+                  <p className="mt-2 text-center text-xs text-slate-400">
                     Sequence navigation is disabled while an assessment attempt is in progress.
                   </p>
                 ) : null}
@@ -1260,9 +1260,9 @@ export function ModuleViewerPage() {
 
       {isSubmitConfirmOpen ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
-          <div className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-5 shadow-xl">
-            <h3 className="text-lg font-bold text-slate-900">Submit Assessment?</h3>
-            <p className="mt-2 text-sm text-slate-600">
+          <div className="w-full max-w-md rounded-xl border border-white/10 bg-slate-900/70 p-5 shadow-xl">
+            <h3 className="text-lg font-bold text-white">Submit Assessment?</h3>
+            <p className="mt-2 text-sm text-slate-300">
               This is the last question. Confirm to submit all your answers and see your result.
             </p>
             <div className="mt-4 flex justify-end gap-2">
@@ -1270,7 +1270,7 @@ export function ModuleViewerPage() {
                 type="button"
                 disabled={isQuizSubmitting}
                 onClick={() => setIsSubmitConfirmOpen(false)}
-                className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
+                className="rounded-md border border-white/20 px-4 py-2 text-sm font-semibold text-slate-200 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 Cancel
               </button>
@@ -1289,3 +1289,5 @@ export function ModuleViewerPage() {
     </section>
   );
 }
+
+

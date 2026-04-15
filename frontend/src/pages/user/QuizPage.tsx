@@ -76,28 +76,28 @@ export function QuizPage() {
   return (
     <section className="space-y-6">
       <div>
-        <h2 className="text-2xl font-bold text-slate-900">{quiz?.title ?? 'Quiz'}</h2>
-        <p className="text-slate-600">
+        <h2 className="text-2xl font-bold text-white">{quiz?.title ?? 'Quiz'}</h2>
+        <p className="text-slate-300">
           Passing score: {quiz?.passing_score ?? '--'}% | Time limit: {quiz?.time_limit_minutes ?? '--'} minutes
         </p>
-        <p className="text-xs text-slate-500">
+        <p className="text-xs text-slate-400">
           Attempts used: {attemptsUsed} / {quiz?.attempt_limit ?? '--'} {quiz ? `| Remaining: ${attemptsRemaining}` : ''}
         </p>
       </div>
 
       {error ? <p className="rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{error}</p> : null}
-      {isLoading ? <p className="text-sm text-slate-500">Loading quiz...</p> : null}
+      {isLoading ? <p className="text-sm text-slate-400">Loading quiz...</p> : null}
 
       {!isLoading ? (
         <form onSubmit={handleSubmit} className="space-y-4">
           {questions.map((question, index) => (
-            <article key={question.id} className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-              <h3 className="font-semibold text-slate-900">
+            <article key={question.id} className="rounded-xl border border-white/10 bg-slate-900/70 p-5 shadow-sm">
+              <h3 className="font-semibold text-white">
                 {index + 1}. {question.prompt}
               </h3>
               <div className="mt-3 space-y-2">
                 {question.answers.map((answer) => (
-                  <label key={answer.id} className="flex cursor-pointer items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm hover:bg-slate-50">
+                  <label key={answer.id} className="flex cursor-pointer items-center gap-2 rounded-md border border-white/10 px-3 py-2 text-sm hover:bg-white/5">
                     <input
                       type="radio"
                       name={`question-${question.id}`}
@@ -111,21 +111,21 @@ export function QuizPage() {
             </article>
           ))}
 
-          <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-            <p className="text-sm text-slate-600">
+          <div className="rounded-xl border border-white/10 bg-slate-900/70 p-5 shadow-sm">
+            <p className="text-sm text-slate-300">
               Answered: {answeredCount} / {questions.length}
             </p>
             <button
               type="submit"
               disabled={isSubmitting || questions.length === 0}
-              className="mt-3 rounded-md bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-60"
+              className="mt-3 rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-500 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {isSubmitting ? 'Submitting...' : 'Submit Quiz'}
             </button>
           </div>
 
           {result ? (
-            <div className={`rounded-md p-4 text-sm ${result.passed ? 'border border-emerald-200 bg-emerald-50 text-emerald-700' : 'border border-amber-200 bg-amber-50 text-amber-700'}`}>
+            <div className={`rounded-md p-4 text-sm ${result.passed ? 'border border-brand-500/30 bg-brand-500/10 text-brand-300' : 'border border-amber-200 bg-amber-50 text-amber-700'}`}>
               <p>
                 Score: {Number(result.score)}% - {result.passed ? 'Passed' : 'Failed'}
               </p>
@@ -140,9 +140,10 @@ export function QuizPage() {
         </form>
       ) : null}
 
-      <Link to={backToPath} className="inline-flex text-sm font-medium text-sky-700 hover:underline">
+      <Link to={backToPath} className="inline-flex text-sm font-medium text-brand-300 hover:underline">
         Back
       </Link>
     </section>
   );
 }
+

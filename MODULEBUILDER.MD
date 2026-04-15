@@ -1,19 +1,22 @@
 # Module Builder (Admin) - Current System Analysis
 
+Last verified against code: April 15, 2026
+
 ## 1) Purpose
 
-The Admin Module Builder is the authoring interface used to create and manage a full training module in HelpDesk Academy.
+The Admin Module Builder is the authoring interface for building HelpDesk Academy modules.
 
-It currently supports:
+Current authoring coverage:
 
-- Module info (title, description, thumbnail)
-- Lessons and lesson sequence
-- Lesson content blocks (text, image, video, simulation, file)
-- Assessment setup using:
+- Module info (title, description, thumbnail, category at create time)
+- Lesson management (sequence, summary, estimated minutes, overview text/image)
+- Topic layer management under lessons
+- Topic-scoped lesson content blocks (`text | image | video | simulation | file`)
+- Assessment setup:
   - Pre Test
   - Post Test
   - Final Test
-- Quiz questions and answers with correct-option marking and explanation/feedback
+- Assessment question and answer creation (with correct-option and explanation)
 
 Primary frontend entry:
 
@@ -21,204 +24,242 @@ Primary frontend entry:
 
 Primary backend aggregation endpoint:
 
-- `GET /api/modules/:id/builder`
+- `GET /api/modules/:id/builder` (admin-only)
 
 ---
 
 ## 2) Builder UI Structure (Frontend)
 
-The builder is organized into step tabs:
+The builder currently uses six tabs:
 
 1. `Module Info`
 2. `Lessons & Content`
-3. `Pre Test`
-4. `Post Test`
-5. `Final Test`
+3. `Topics & Contents`
+4. `Pre Test`
+5. `Post Test`
+6. `Final Test`
 
-This flow is implemented by the local `Step` union in:
+Source:
 
-- `frontend/src/pages/admin/AdminModulesPage.tsx`
+- `frontend/src/pages/admin/AdminModulesPage.tsx` (`Step` union)
 
-The left area contains module selection (all modules). The right area renders the active step editor for the selected module.
+Layout:
+
+- Left rail: module list selector
+- Right panel: active tab editor for selected module
 
 ---
 
 ## 3) Frontend State Model
 
-Main page state in `AdminModulesPage`:
+Main state in `AdminModulesPage`:
 
-- `modules`: module list (for left-side selector)
-- `builder`: full builder payload for active module
-- `selectedModuleId`: active module
-- `selectedLessonId`: active lesson in Lessons step
-- `selectedPreTestLessonId`: lesson anchor for pre-test placement
-- `selectedPostTestLessonId`: lesson anchor for post-test placement
-- `step`: current tab (`module | lessons | preTest | postTest | finalTest`)
-- `busy`, `error`: request state
+- `modules`
+- `builder`
+- `selectedModuleId`
+- `selectedLessonId`
+- `selectedTopicId`
+- `selectedPreTestLessonId`
+- `selectedPostTestLessonId`
+- `step`: `module | lessons | topics | preTest | postTest | finalTest`
+- `busy`, `error`
 - form states:
   - `newModule`
   - `newLesson`
+  - `newTopic`
   - `newContent`
   - `newQuestion`
   - `newAnswer`
 
-Data load functions:
+Data loading:
 
 - `loadModules()` -> `getModules()`
 - `loadBuilder(moduleId)` -> `getModuleBuilder(moduleId)`
 
-When builder loads:
+Selection behavior on builder load:
 
-- first lesson is auto-selected
-- pre-test lesson anchor defaults to existing pre-test placement (if found), otherwise first lesson
-- post-test target defaults to first lesson
+- lessons are ordered by `sequence_no`
+- lesson selection is preserved when possible
+- topic selection is preserved when possible; otherwise first topic in selected lesson
+- pre/post target selections are preserved when possible
 
 ---
 
-## 4) Pre/Post/Final Test Classification Rules
+## 4) Pre/Post/Final Classification Rules
 
-Current classification is title-driven for lesson quizzes:
+Assessment classification in UI is still title-driven for lesson quizzes:
 
-- **Pre Test**: `quiz_type = 'lesson_quiz'` AND title matches `/\bpre[-\s]?test\b/i`
-- **Post Test**: `quiz_type = 'lesson_quiz'` AND not recognized as pre-test
-- **Final Test**: `quiz_type = 'final_exam'`
+- Pre Test:
+  - `quiz_type = 'lesson_quiz'`
+  - title matches `/\bpre[-\s]?test\b/i`
+- Post Test:
+  - `quiz_type = 'lesson_quiz'`
+  - not matched as pre-test
+- Final Test:
+  - `quiz_type = 'final_exam'`
 
 Source:
 
 - `frontend/src/pages/admin/AdminModulesPage.tsx`
 
-Important implication:
+Implication:
 
-- If a pre-test is renamed without including "pre test" text, it will be treated as post-test by the UI logic.
+- Renaming a pre-test title without "pre test" semantics reclassifies it as post-test in UI.
 
 ---
 
 ## 5) Step-by-Step Behavior
 
-## 5.1 Module Info
+### 5.1 Module Info
 
-Create module form (top section):
+Create module form:
 
 - Title (required)
-- Thumbnail URL (optional)
 - Category
-- Difficulty
+- Thumbnail URL (optional)
+- Thumbnail upload (optional, converted to data URL client-side)
 - Description (required)
 
-API used:
+Create API:
 
 - `POST /api/modules`
 
-Edit selected module (Module tab):
+Notes:
 
-- Editable currently: title, description, thumbnail URL
-- Save action uses:
+- UI does not expose difficulty on create; backend defaults to `Beginner`.
+
+Edit selected module panel:
+
+- Editable in UI: title, description, thumbnail URL/file upload
+- Save API:
   - `PUT /api/modules/:id`
+- UI includes "Open User Preview" link to `/user/modules/:id`
 
-Note:
+Not currently editable in this UI:
 
-- Category and difficulty are set at creation, but current edit panel does not expose them for update even though backend supports them.
+- difficulty
+- prerequisite module
+- lock status
+- active status
 
-## 5.2 Lessons & Content
+### 5.2 Lessons & Content
 
-Lesson management:
+Current responsibilities:
 
-- Add lesson (`POST /api/lessons`)
-- Reorder lesson via Up/Down (`PATCH /api/lessons/reorder`)
-- Delete lesson (`DELETE /api/lessons/:id`)
-- Edit lesson title/summary/estimated minutes (`PUT /api/lessons/:id`)
+- Add lesson
+- Reorder lessons
+- Delete lesson
+- Edit lesson title/summary/estimated minutes/overview text/overview image
 
-Lesson content management:
+Lesson APIs:
 
-- Add content block (`POST /api/content`)
-  - content type: `text | image | video | simulation | file`
-  - title/body/url/simulation key
-- Delete content block (`DELETE /api/content/:id`)
+- `POST /api/lessons`
+- `PATCH /api/lessons/reorder`
+- `DELETE /api/lessons/:id`
+- `PUT /api/lessons/:id`
 
-Current UI does not provide inline edit/reorder for existing content blocks, although backend supports content update.
+Important:
 
-## 5.3 Pre Test
+- Topic creation/content creation was removed from this step.
+- UI explicitly directs users to `Topics & Contents` for topic/content authoring.
+
+### 5.3 Topics & Contents
+
+Current responsibilities:
+
+- Select lesson context
+- Add topic to selected lesson
+- Reorder topics
+- Delete topic
+- Edit topic title/summary
+- Add content block to selected topic
+- Delete existing content block
+
+Topic APIs:
+
+- `POST /api/topics`
+- `PATCH /api/topics/reorder`
+- `PUT /api/topics/:id`
+- `DELETE /api/topics/:id`
+
+Content APIs:
+
+- `POST /api/content` (requires `topicId`)
+- `DELETE /api/content/:id`
+
+Current UI limits:
+
+- no content edit form
+- no content reorder controls
+- no file upload UX for content blocks (URL text input only)
+- `simulationKey` exists in state/API but is not exposed by the add-content form
+
+### 5.4 Pre Test
 
 Placement model:
 
-- Pre-test is attached to a lesson via `quiz.lesson_id`, interpreted as "place before this lesson".
-- Admin selects target lesson, then saves placement (`PUT /api/quizzes/:id` with `lessonId`).
+- Stored as `lesson_quiz` with `lesson_id`
+- Interpreted in UI as "place before selected lesson"
 
-Visualization:
+Capabilities:
 
-- sequence card list of all lessons
-- pre-test card injected before anchored lesson when pre-test exists
+- select anchor lesson
+- save placement via quiz update
+- create pre-test if missing
+- configure passing/time/attempt
+- add questions and answers
 
-Creation:
-
-- If no pre-test exists in current step, create button appears.
-- Create action:
-  - `POST /api/quizzes`
-  - `quizType = 'lesson_quiz'`
-  - title defaults to `<Module Title> Pre Test`
-
-## 5.4 Post Test
-
-Placement model:
-
-- Post-test is lesson-scoped using `quiz.lesson_id`.
-- Admin selects target lesson and creates/edits the test for that lesson.
-
-Visualization:
-
-- each lesson shows whether a post-test is present
-
-Creation:
+APIs:
 
 - `POST /api/quizzes`
-- `quizType = 'lesson_quiz'`
-- title defaults to `<Module Title> Post Test`
+- `PUT /api/quizzes/:id`
+- `POST /api/quizzes/:id/questions`
+- `POST /api/quizzes/questions/:questionId/answers`
 
-## 5.5 Final Test
+### 5.5 Post Test
 
 Placement model:
 
-- Always represented as terminal assessment after lessons.
-- Stored with `quiz_type = 'final_exam'` and `lesson_id = null`.
+- lesson-scoped `lesson_quiz` records (`quiz.lesson_id`)
 
-Creation:
+Capabilities:
 
-- `POST /api/quizzes`
-- title defaults to `<Module Title> Final Test`
+- choose target lesson
+- create post-test for selected lesson if missing
+- configure passing/time/attempt
+- add questions and answers
+
+Same quiz/question/answer APIs as pre-test.
+
+### 5.6 Final Test
+
+Placement model:
+
+- terminal assessment (end-of-sequence)
+- stored as `quiz_type = 'final_exam'`, typically `lesson_id = null`
+
+Capabilities:
+
+- create if missing
+- configure passing/time/attempt
+- add questions and answers
+
+### 5.7 Assessment Authoring Limits
+
+In current admin UI:
+
+- question/answer creation is supported
+- question/answer edit/delete is not exposed
+- quiz delete is not exposed
+- quiz title edit is not exposed
+
+Backend endpoints for those operations exist.
 
 ---
 
-## 6) Assessment Authoring (Questions and Answers)
+## 6) Backend API Surface Used by Builder
 
-For pre/post/final selected test:
-
-- Configure:
-  - passing score
-  - time limit (minutes)
-  - attempt limit
-- Save settings:
-  - `PUT /api/quizzes/:id`
-
-Question management:
-
-- Add question prompt:
-  - `POST /api/quizzes/:id/questions`
-
-Answer management per question:
-
-- Add answer text
-- Mark correct answer
-- Optional explanation/feedback
-- API:
-  - `POST /api/quizzes/questions/:questionId/answers`
-
-Current UI supports add/display, but not edit/delete for questions/answers (APIs exist in backend for update/delete).
-
----
-
-## 7) Backend API Surface Used by Builder
-
-## 7.1 Module
+### 6.1 Modules
 
 - `GET /api/modules`
 - `POST /api/modules` (admin)
@@ -226,60 +267,61 @@ Current UI supports add/display, but not edit/delete for questions/answers (APIs
 - `DELETE /api/modules/:id` (admin)
 - `GET /api/modules/:id/builder` (admin)
 
-Controllers:
+Controller:
 
 - `backend/src/controllers/modulesController.js`
 
-## 7.2 Lessons
+### 6.2 Lessons
 
-- `GET /api/lessons?moduleId=...`
 - `POST /api/lessons` (admin)
 - `PUT /api/lessons/:id` (admin)
 - `DELETE /api/lessons/:id` (admin)
 - `PATCH /api/lessons/reorder` (admin)
 
-Controllers:
+Controller:
 
 - `backend/src/controllers/lessonsController.js`
 
-## 7.3 Content
+### 6.3 Topics
 
-- `GET /api/content?lessonId=...`
+- `POST /api/topics` (admin)
+- `PUT /api/topics/:id` (admin)
+- `DELETE /api/topics/:id` (admin)
+- `PATCH /api/topics/reorder` (admin)
+
+Controller:
+
+- `backend/src/controllers/topicsController.js`
+
+### 6.4 Content
+
 - `POST /api/content` (admin)
-- `PUT /api/content/:id` (admin)
 - `DELETE /api/content/:id` (admin)
 
-Controllers:
+Controller:
 
 - `backend/src/controllers/contentController.js`
 
-## 7.4 Quizzes / Tests
+### 6.5 Quizzes / Questions / Answers
 
-- `GET /api/quizzes?moduleId=...`
 - `POST /api/quizzes` (admin)
 - `PUT /api/quizzes/:id` (admin)
-- `DELETE /api/quizzes/:id` (admin)
-- `GET /api/quizzes/:id/questions` (admin)
 - `POST /api/quizzes/:id/questions` (admin)
-- `PUT /api/quizzes/questions/:questionId` (admin)
-- `DELETE /api/quizzes/questions/:questionId` (admin)
-- `GET /api/quizzes/questions/:questionId/answers` (admin)
 - `POST /api/quizzes/questions/:questionId/answers` (admin)
-- `PUT /api/quizzes/answers/:answerId` (admin)
-- `DELETE /api/quizzes/answers/:answerId` (admin)
 
-Controllers:
+Controller:
 
 - `backend/src/controllers/quizzesController.js`
 
 ---
 
-## 8) Builder Aggregated Payload
+## 7) Builder Aggregated Payload
 
 `GET /api/modules/:id/builder` returns:
 
 - `module`
 - `lessons[]`
+- `topics[]`
 - `content[]`
 - `quizzes[]`
 - `questions[]`
@@ -290,32 +332,36 @@ Type reference:
 
 - `frontend/src/types/lms.ts` -> `ModuleBuilderPayload`
 
-This endpoint is the main source of truth for the admin builder page.
+This payload is the builder page source of truth.
 
 ---
 
-## 9) Database Model Behind Builder
+## 8) Database Model Behind Builder
 
-Core tables used directly by builder:
+Core builder tables:
 
 - `modules`
 - `module_categories`
 - `lessons`
+- `topics`
 - `lesson_content`
 - `quizzes`
 - `questions`
 - `answers`
-- `module_certification_settings` (currently returned in builder payload)
+- `module_certification_settings`
 
-Schema sources:
+Migration sources:
 
 - `backend/src/db/migrations/003_lms_core_schema.sql`
 - `backend/src/db/migrations/004_module_builder_enhancements.sql`
+- `backend/src/db/migrations/005_topics_layer.sql`
+- `backend/src/db/migrations/006_lesson_overview_fields.sql`
 
 Relationship summary:
 
 - `modules` 1-to-many `lessons`
-- `lessons` 1-to-many `lesson_content`
+- `lessons` 1-to-many `topics`
+- `topics` 1-to-many `lesson_content`
 - `modules` 1-to-many `quizzes`
 - `lessons` optional 1-to-many `quizzes` via `quizzes.lesson_id`
 - `quizzes` 1-to-many `questions`
@@ -324,86 +370,77 @@ Relationship summary:
 
 ---
 
-## 10) Access Control
+## 9) Access Control
 
-Builder mutation routes are protected by `requireRole('admin')`.
+Global authentication:
 
-Examples:
+- All `/api/*` routes (except `/api/auth` and `/api/health`) are behind `requireAuth` in `backend/src/app.js`.
 
-- module create/update/delete
-- lesson create/update/delete/reorder
-- content create/update/delete
-- quiz/test create/update/delete
-- question/answer create/update/delete
+Builder-sensitive operations:
 
-Read routes (`GET`) are generally authenticated; some are not role-restricted.
+- mutation routes use `requireRole('admin')`
+- `GET /api/modules/:id/builder` is explicitly admin-only
 
-Route files:
-
-- `backend/src/routes/modulesRoutes.js`
-- `backend/src/routes/lessonsRoutes.js`
-- `backend/src/routes/contentRoutes.js`
-- `backend/src/routes/quizzesRoutes.js`
+Read endpoints like `GET /api/modules` are authenticated but not admin-only.
 
 ---
 
-## 11) Runtime Learning Rules Connected to Builder Output
+## 10) Runtime Learning Rules Connected to Builder Output
 
-Learner-side enforcement is driven by progression services, not by builder UI tabs:
+Learner-side enforcement comes from progression/results flow:
 
-- Lessons are sequentially enforced (`ensurePreviousLessonCompleted`)
-- Quizzes unlock only after **all** published lessons are completed
-- Final exam unlocks after all active lesson quizzes are passed
-- Attempt limits are enforced
+- lessons are sequential (`ensurePreviousLessonCompleted`)
+- any quiz unlock requires all published lessons completed
+- final exam unlock also requires all active lesson quizzes passed
+- attempt limits enforced per quiz
 
-Source:
+Sources:
 
 - `backend/src/services/progressionService.js`
-
-Completion behavior:
-
-- Submitting final exam marks enrollment status as `completed` in `resultsController`
-
-Source:
-
 - `backend/src/controllers/resultsController.js`
+
+Completion behavior (current implementation):
+
+- submitting a `final_exam` marks enrollment as `completed` (regardless of pass/fail state)
 
 Note:
 
-- This is aligned with your recent requirement "no certification page, module completed after final test."
+- `module_certification_settings` is still returned/stored, but not used in this completion path.
+- `createCertificateIfEligible` exists in `progressionService` but is not called from quiz submission flow.
 
 ---
 
-## 12) Current Gaps / Risks (Important)
+## 11) Current Gaps / Risks (Important)
 
-1. Pre/Post detection depends on quiz title regex.
-2. Builder UI supports one visible pre-test and one mapped post-test per lesson; DB can technically hold more, which may create hidden/ambiguous records.
-3. Certification settings still exist in schema and builder payload, but user completion now depends on final exam submission logic.
-4. Content add form does not expose file upload handling (URL-based only).
-5. `createContent` default `sortOrder = 1`; repeated inserts may create identical sort orders unless client sets ordering.
-6. No admin UI for editing/deleting quiz questions/answers after creation (backend endpoints exist).
-7. No hard backend rule that "pre-test must be before lessons" or "post-test must be below lesson content"; current behavior is convention plus UI.
-8. Learner unlock logic currently ignores pre/post placement and requires all lessons complete before lesson quizzes (including pre-tests) become available.
-
----
-
-## 13) Suggested Next Refactor (If You Want It Robust)
-
-1. Replace title-based pre/post detection with explicit `quiz_stage` enum in DB (`pre_test`, `post_test`, `final_test`).
-2. Add uniqueness constraints:
-   - one pre-test per module
-   - one final-test per module
-   - at most one post-test per lesson
-3. Align progression unlock logic with intended stage semantics:
-   - pre-test before first lesson or configured anchor
-   - post-test after lesson completion
-   - final-test after all lessons and required post-tests
-4. Expose full CRUD UI for questions/answers and content reorder/edit.
-5. Remove or repurpose `module_certification_settings` if certification remains out of scope.
+1. Pre/Post detection still depends on title regex.
+2. UI assumes one primary pre-test and one selected post-test context, but DB can hold multiple lesson quizzes per lesson/module.
+3. Content management is partial in UI: create/delete only; no content edit/reorder UI.
+4. Content form is URL-based; no direct file upload for content blocks.
+5. `simulationKey` is not exposed in the topic content creation form.
+6. Assessment authoring UI is create-only for questions/answers; no edit/delete controls.
+7. Module edit UI omits backend-supported fields (difficulty, lock/active state, prerequisite).
+8. Quiz management UI omits delete/title-edit controls.
+9. Learner unlock logic ignores "pre/post placement semantics"; all lesson quizzes unlock only after all lessons.
+10. Final exam submission currently completes enrollment even when failed.
+11. Certification settings exist but are not integrated into current module completion flow.
+12. Thumbnail/lesson image uploads are stored as data URLs, which can bloat payload/storage.
 
 ---
 
-## 14) Relevant Files
+## 12) Suggested Next Refactor
+
+1. Add explicit quiz stage metadata (`pre_test`, `post_test`, `final_test`) instead of title parsing.
+2. Add DB constraints for intended uniqueness (one pre-test per module, one final exam per module, max one post-test per lesson if that is the rule).
+3. Align runtime unlock to stage semantics (pre before lesson, post after lesson, final after required prerequisites).
+4. Gate module completion on final exam pass (if that is required), not only submission.
+5. Add full CRUD UI for topic content, quiz questions, and answers.
+6. Expose module lifecycle fields (difficulty, is_active, is_locked, prerequisite) in admin builder UI.
+7. Replace data URL image storage with proper file storage/upload pipeline.
+8. Either wire `module_certification_settings` into active completion logic or remove/de-scope it cleanly.
+
+---
+
+## 13) Relevant Files
 
 Frontend:
 
@@ -411,20 +448,29 @@ Frontend:
 - `frontend/src/lib/api.ts`
 - `frontend/src/types/lms.ts`
 
-Backend:
+Backend controllers/services:
 
 - `backend/src/controllers/modulesController.js`
 - `backend/src/controllers/lessonsController.js`
+- `backend/src/controllers/topicsController.js`
 - `backend/src/controllers/contentController.js`
 - `backend/src/controllers/quizzesController.js`
 - `backend/src/controllers/resultsController.js`
 - `backend/src/services/progressionService.js`
+
+Backend routes/app:
+
+- `backend/src/app.js`
 - `backend/src/routes/modulesRoutes.js`
 - `backend/src/routes/lessonsRoutes.js`
+- `backend/src/routes/topicsRoutes.js`
 - `backend/src/routes/contentRoutes.js`
 - `backend/src/routes/quizzesRoutes.js`
+- `backend/src/routes/resultsRoutes.js`
 
-Database:
+Database migrations:
 
 - `backend/src/db/migrations/003_lms_core_schema.sql`
 - `backend/src/db/migrations/004_module_builder_enhancements.sql`
+- `backend/src/db/migrations/005_topics_layer.sql`
+- `backend/src/db/migrations/006_lesson_overview_fields.sql`
