@@ -46,7 +46,8 @@ app.use(
     allowedHeaders: ['Content-Type', 'Authorization'],
   })
 );
-app.use(express.json());
+app.use(express.json({ limit: env.requestBodyLimit }));
+app.use(express.urlencoded({ extended: true, limit: env.requestBodyLimit }));
 
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok' });

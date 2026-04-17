@@ -1,4 +1,5 @@
 import { pool } from '../db/pool.js';
+import { assertModulePublishReady, getModulePublishReadiness } from '../services/modulePublishValidationService.js';
 import { AppError } from '../utils/AppError.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 
@@ -9,7 +10,7 @@ function validateDifficulty(difficulty) {
   }
 }
 
-export const listModules = asyncHandler(async (_req, res) => {
+export const listModules = asyncHandler(async (req, res) => {
   const result = await pool.query(
     `
       SELECT
@@ -32,7 +33,22 @@ export const listModules = asyncHandler(async (_req, res) => {
       ORDER BY m.created_at DESC;
     `
   );
-  res.json({ modules: result.rows });
+  if (req.user.role === 'admin') {
+    res.json({ modules: result.rows });
+    return;
+  }
+
+  const activeModules = result.rows.filter((module) => module.is_active);
+  const readyModules = (
+    await Promise.all(
+      activeModules.map(async (module) => {
+        const readiness = await getModulePublishReadiness(module.id);
+        return readiness.isReady ? module : null;
+      })
+    )
+  ).filter(Boolean);
+
+  res.json({ modules: readyModules });
 });
 
 export const getModuleById = asyncHandler(async (req, res) => {
@@ -51,6 +67,14 @@ export const getModuleById = asyncHandler(async (req, res) => {
   );
   if (moduleResult.rowCount === 0) {
     throw new AppError('Module not found.', 404);
+  }
+  const moduleRow = moduleResult.rows[0];
+
+  if (req.user.role !== 'admin') {
+    if (!moduleRow.is_active) {
+      throw new AppError('Module is not published for learners yet.', 403);
+    }
+    await assertModulePublishReady(Number(id), { statusCode: 403, includeReasons: false });
   }
 
   const lessonsResult = await pool.query(
@@ -80,7 +104,7 @@ export const getModuleById = asyncHandler(async (req, res) => {
 
   res.json({
     module: {
-      ...moduleResult.rows[0],
+      ...moduleRow,
       lessons: lessonsResult.rows,
       certification: certificationResult.rows[0] ?? null,
     },
@@ -105,7 +129,7 @@ export const createModule = asyncHandler(async (req, res) => {
   const inserted = await pool.query(
     `
       INSERT INTO modules (
-        title, description, thumbnail_url, category_id, difficulty, prerequisite_module_id, created_by_user_id
+        title, description, thumbnail_url, category_id, difficulty, prerequisite_module_id, created_by_user_id, is_active
       )
       VALUES (
         $1,
@@ -114,7 +138,8 @@ export const createModule = asyncHandler(async (req, res) => {
         (SELECT id FROM module_categories WHERE name = $4 LIMIT 1),
         $5,
         $6,
-        $7
+        $7,
+        FALSE
       )
       RETURNING id, title, description, thumbnail_url, difficulty, prerequisite_module_id, is_locked, is_active, created_at, updated_at;
     `,
@@ -152,6 +177,9 @@ export const updateModule = asyncHandler(async (req, res) => {
     isActive,
   } = req.body;
   if (difficulty) validateDifficulty(difficulty);
+  if (isActive === true) {
+    await assertModulePublishReady(Number(id), { statusCode: 400, includeReasons: true });
+  }
 
   const updated = await pool.query(
     `
@@ -290,10 +318,10 @@ export const getModuleBuilder = asyncHandler(async (req, res) => {
   const quizzesResult = await pool.query(
     `
       SELECT
-        id, module_id, lesson_id, title, quiz_type, passing_score, time_limit_minutes, attempt_limit, is_active
+        id, module_id, lesson_id, title, quiz_type, stage, passing_score, time_limit_minutes, attempt_limit, is_active
       FROM quizzes
       WHERE module_id = $1
-      ORDER BY quiz_type ASC, lesson_id ASC NULLS LAST, id ASC;
+      ORDER BY stage ASC, lesson_id ASC NULLS LAST, id ASC;
     `,
     [id]
   );

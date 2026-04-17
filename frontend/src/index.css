@@ -71,6 +71,14 @@
     background-color: rgba(148, 163, 184, 0.2);
   }
 
+  .user-theme .bg-white\/5 {
+    background-color: rgba(255, 255, 255, 0.05);
+  }
+
+  .user-theme .border-slate-100 {
+    border-color: rgba(255, 255, 255, 0.08);
+  }
+
   .user-theme .border-slate-200 {
     border-color: rgba(255, 255, 255, 0.1);
   }
@@ -85,6 +93,10 @@
 
   .user-theme .text-slate-700 {
     color: #e2e8f0;
+  }
+
+  .user-theme .text-slate-800 {
+    color: #f1f5f9;
   }
 
   .user-theme .text-slate-600 {
@@ -118,6 +130,10 @@
     background-color: rgba(14, 165, 233, 0.18);
   }
 
+  .user-theme .bg-sky-50 {
+    background-color: rgba(14, 165, 233, 0.12);
+  }
+
   .user-theme .bg-emerald-50,
   .user-theme .bg-emerald-50\/60 {
     background-color: rgba(14, 165, 233, 0.12);
@@ -131,6 +147,10 @@
   .user-theme .border-emerald-500\/30,
   .user-theme .border-emerald-500\/40 {
     border-color: rgba(14, 165, 233, 0.35);
+  }
+
+  .user-theme .border-sky-300 {
+    border-color: rgba(56, 189, 248, 0.55);
   }
 
   .user-theme .text-emerald-800,
@@ -177,6 +197,11 @@
     background-color: rgba(255, 255, 255, 0.08);
   }
 
+  .user-theme .hover\:bg-white:hover,
+  .user-theme .hover\:bg-sky-50:hover {
+    background-color: rgba(255, 255, 255, 0.08);
+  }
+
   .user-theme .hover\:text-slate-900:hover {
     color: #f8fafc;
   }
@@ -203,5 +228,16 @@
 
   .user-theme .text-amber-700 {
     color: #fcd34d;
+  }
+}
+
+@layer utilities {
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
   }
 }

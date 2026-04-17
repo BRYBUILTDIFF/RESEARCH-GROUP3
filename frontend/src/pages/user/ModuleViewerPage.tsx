@@ -1,21 +1,21 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+﻿import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Activity,
   Award,
   Check,
   CheckCircle2,
-  CircleDotDashed,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
+  CircleDotDashed,
   CirclePlay,
   ClipboardList,
   Cpu,
   HelpCircle,
+  Lock,
   PanelLeftClose,
   PanelLeftOpen,
-  ShieldCheck,
   Timer,
-  XCircle,
 } from 'lucide-react';
 import { useParams } from 'react-router-dom';
 import {
@@ -41,148 +41,100 @@ import type {
   TopicSummary,
 } from '../../types/lms';
 
-function toYouTubeEmbedUrl(url: string) {
-  try {
-    const parsed = new URL(url);
-    if (parsed.hostname.includes('youtu.be')) {
-      return `https://www.youtube.com/embed/${parsed.pathname.replace('/', '')}`;
-    }
-    if (parsed.hostname.includes('youtube.com')) {
-      const videoId = parsed.searchParams.get('v');
-      return videoId ? `https://www.youtube.com/embed/${videoId}` : null;
-    }
-  } catch {
-    return null;
-  }
-  return null;
+function normalizeUrlCandidate(value: string | null | undefined) {
+  const trimmed = (value ?? '').trim();
+  return trimmed.length > 0 ? trimmed : null;
 }
 
-function ContentBlock({ block }: { block: LessonContentBlock }) {
-  if (block.content_type === 'text') {
-    return (
-      <article className="rounded-lg border border-white/10 bg-slate-900/70 p-4">
-        <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Text Lesson</p>
-        <h4 className="mt-1 text-base font-semibold text-white">{block.title}</h4>
-        <p className="mt-2 whitespace-pre-wrap text-sm text-slate-200">{block.body_text || 'No text content provided.'}</p>
-      </article>
-    );
-  }
-
-  if (block.content_type === 'image') {
-    return (
-      <article className="rounded-lg border border-white/10 bg-slate-900/70 p-4">
-        <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Image</p>
-        <h4 className="mt-1 text-base font-semibold text-white">{block.title}</h4>
-        {block.content_url ? (
-          <img src={block.content_url} alt={block.title} className="mt-3 w-full rounded-md border border-white/10 object-cover" />
-        ) : (
-          <p className="mt-2 text-sm text-slate-300">No image URL configured.</p>
-        )}
-      </article>
-    );
-  }
-
-  if (block.content_type === 'video') {
-    const embedUrl = block.content_url ? toYouTubeEmbedUrl(block.content_url) : null;
-    return (
-      <article className="rounded-lg border border-white/10 bg-slate-900/70 p-4">
-        <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Video</p>
-        <h4 className="mt-1 text-base font-semibold text-white">{block.title}</h4>
-        {embedUrl ? (
-          <div className="mt-3 aspect-video overflow-hidden rounded-md border border-white/10">
-            <iframe
-              src={embedUrl}
-              title={block.title}
-              className="h-full w-full"
-              loading="lazy"
-              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-              allowFullScreen
-            />
-          </div>
-        ) : block.content_url ? (
-          <video controls className="mt-3 w-full rounded-md border border-white/10">
-            <source src={block.content_url} />
-          </video>
-        ) : (
-          <p className="mt-2 text-sm text-slate-300">No video URL configured.</p>
-        )}
-      </article>
-    );
-  }
-
-  if (block.content_type === 'simulation') {
-    return (
-      <article className="rounded-lg border border-brand-500/30 bg-brand-500/10 p-4">
-        <p className="text-xs font-semibold uppercase tracking-wider text-brand-300">Simulation</p>
-        <h4 className="mt-1 text-base font-semibold text-white">{block.title}</h4>
-        <p className="mt-2 text-sm text-slate-200">{block.body_text || 'Complete this interactive scenario to practice troubleshooting.'}</p>
-        {block.content_url ? (
-          <a
-            href={block.content_url}
-            target="_blank"
-            rel="noreferrer"
-            className="mt-3 inline-flex rounded-md bg-brand-600 px-3 py-2 text-sm font-semibold text-white hover:bg-brand-500"
-          >
-            Open Simulation
-          </a>
-        ) : null}
-      </article>
-    );
-  }
-
-  return (
-    <article className="rounded-lg border border-white/10 bg-slate-900/70 p-4">
-      <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Download</p>
-      <h4 className="mt-1 text-base font-semibold text-white">{block.title}</h4>
-      {block.content_url ? (
-        <a href={block.content_url} target="_blank" rel="noreferrer" className="mt-3 inline-flex text-sm font-semibold text-brand-300 hover:underline">
-          Open Resource
-        </a>
-      ) : (
-        <p className="mt-2 text-sm text-slate-300">No file URL configured.</p>
-      )}
-    </article>
-  );
+function sanitizeRichHtml(input: string) {
+  return input
+    .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, '')
+    .replace(/\son\w+="[^"]*"/gi, '')
+    .replace(/\son\w+='[^']*'/gi, '');
 }
+
+function isVideoMediaUrl(url: string | null | undefined) {
+  if (!url) return false;
+  return /^(data:video\/|https?:\/\/.*\.(mp4|webm|ogg|mov)(\?.*)?$)/i.test(url);
+}
+
+type AssessmentStage = 'pre' | 'post' | 'final';
+
+type SequenceItem =
+  | {
+      key: string;
+      type: 'lesson';
+      lesson: LessonSummary;
+      unlocked: boolean;
+    }
+  | {
+      key: string;
+      type: 'topic';
+      lesson: LessonSummary;
+      topic: TopicSummary;
+      topicIndex: number;
+      topicCount: number;
+      unlocked: boolean;
+    }
+  | {
+      key: string;
+      type: 'assessment';
+      quiz: QuizSummary;
+      stage: AssessmentStage;
+      lesson: LessonSummary | null;
+      unlocked: boolean;
+    };
 
 const isPreTest = (quiz: QuizSummary) =>
-  quiz.quiz_type === 'lesson_quiz' && /\bpre[-\s]?test\b/i.test(quiz.title);
+  quiz.quiz_type === 'lesson_quiz' && (quiz.stage === 'pre_test' || quiz.lesson_id === null);
 
 const formatMinutesLabel = (minutes: number) => `${minutes} ${minutes === 1 ? 'minute' : 'minutes'}`;
 
-const assessmentMeta = (quiz: QuizSummary) => {
-  if (quiz.quiz_type === 'final_exam') {
-    return {
-      label: 'Final Exam',
-      icon: Award,
-      accent: 'text-slate-200',
-      surface: 'bg-white/10',
-      border: 'border-white/10',
-      buttonClass: 'bg-slate-900',
-      cta: 'Take Final Exam',
-    };
-  }
-  if (isPreTest(quiz)) {
-    return {
-      label: 'Pre Test',
-      icon: ClipboardList,
-      accent: 'text-slate-200',
-      surface: 'bg-white/10',
-      border: 'border-white/10',
-      buttonClass: 'bg-slate-900',
-      cta: 'Take Pre Test',
-    };
-  }
-  return {
-    label: 'Post Test',
+const assessmentViewMeta: Record<AssessmentStage, {
+  label: string;
+  chipClass: string;
+  cardClass: string;
+  buttonClass: string;
+  icon: typeof ClipboardList;
+  description: string;
+  cta: string;
+}> = {
+  pre: {
+    label: 'Pre-Test',
+    chipClass: 'border-violet-400/50 bg-violet-500/15 text-violet-200',
+    cardClass: 'border-violet-400/30 bg-violet-950/20',
+    buttonClass: 'bg-violet-600 hover:bg-violet-500',
+    icon: ClipboardList,
+    description: 'This assessment checks your baseline knowledge before the lessons.',
+    cta: 'Start assessment',
+  },
+  post: {
+    label: 'Post-Test',
+    chipClass: 'border-orange-400/50 bg-orange-500/15 text-orange-200',
+    cardClass: 'border-orange-400/30 bg-orange-950/20',
+    buttonClass: 'bg-orange-600 hover:bg-orange-500',
     icon: CirclePlay,
-    accent: 'text-slate-200',
-    surface: 'bg-white/10',
-    border: 'border-white/10',
-    buttonClass: 'bg-slate-900',
-    cta: 'Take Post Test',
-  };
+    description: 'This assessment validates your understanding after completing the lesson topics.',
+    cta: 'Start assessment',
+  },
+  final: {
+    label: 'Final Exam',
+    chipClass: 'border-amber-400/50 bg-amber-500/15 text-amber-200',
+    cardClass: 'border-amber-400/30 bg-amber-950/20',
+    buttonClass: 'bg-amber-600 hover:bg-amber-500',
+    icon: Award,
+    description: 'This final assessment evaluates full-module mastery.',
+    cta: 'Start final exam',
+  },
 };
+
+function StatusPill({ text, className }: { text: string; className: string }) {
+  return (
+    <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] ${className}`}>
+      {text}
+    </span>
+  );
+}
 
 export function ModuleViewerPage() {
   const { moduleId } = useParams<{ moduleId: string }>();
@@ -198,10 +150,12 @@ export function ModuleViewerPage() {
   const [lessonContentByLessonId, setLessonContentByLessonId] = useState<Record<number, LessonContentBlock[]>>({});
   const [contentByTopicId, setContentByTopicId] = useState<Record<number, LessonContentBlock[]>>({});
   const [selectedLessonId, setSelectedLessonId] = useState<number | null>(null);
-  const [expandedLessonId, setExpandedLessonId] = useState<number | null>(null);
   const [selectedTopicId, setSelectedTopicId] = useState<number | null>(null);
   const [selectedAssessmentId, setSelectedAssessmentId] = useState<number | null>(null);
-  const [isLessonsSidebarOpen, setIsLessonsSidebarOpen] = useState(true);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [expandedLessons, setExpandedLessons] = useState<Record<number, boolean>>({});
+  const [openTopicIdByLessonId, setOpenTopicIdByLessonId] = useState<Record<number, number | null>>({});
+  const [quizPreviewByQuizId, setQuizPreviewByQuizId] = useState<Record<number, QuizQuestion[]>>({});
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [isMutating, setIsMutating] = useState(false);
@@ -254,10 +208,7 @@ export function ModuleViewerPage() {
 
       const lessonArtifacts = await Promise.all(
         orderedLessons.map(async (lesson) => {
-          const [topics, lessonContent] = await Promise.all([
-            getTopics(lesson.id),
-            getLessonContent(lesson.id),
-          ]);
+          const [topics, lessonContent] = await Promise.all([getTopics(lesson.id), getLessonContent(lesson.id)]);
           return { lessonId: lesson.id, topics, lessonContent };
         })
       );
@@ -281,31 +232,34 @@ export function ModuleViewerPage() {
           }
           nextContentByTopicId[block.topic_id].push(block);
         }
+
+        nextLessonContentByLessonId[artifact.lessonId].sort((a, b) => a.sort_order - b.sort_order);
       }
+
+      Object.keys(nextContentByTopicId).forEach((topicId) => {
+        nextContentByTopicId[Number(topicId)].sort((a, b) => a.sort_order - b.sort_order);
+      });
 
       setTopicsByLessonId(nextTopicsByLessonId);
       setLessonContentByLessonId(nextLessonContentByLessonId);
       setContentByTopicId(nextContentByTopicId);
 
-      const defaultLessonId =
-        orderedLessons.find((lesson) => !lesson.completed)?.id ??
-        orderedLessons[0]?.id ??
-        null;
-
+      const defaultLessonId = orderedLessons.find((lesson) => !lesson.completed)?.id ?? orderedLessons[0]?.id ?? null;
       const nextLessonId =
-        selectedLessonId && orderedLessons.some((lesson) => lesson.id === selectedLessonId)
-          ? selectedLessonId
-          : defaultLessonId;
+        selectedLessonId && orderedLessons.some((lesson) => lesson.id === selectedLessonId) ? selectedLessonId : defaultLessonId;
 
-      const topicsForLesson = nextLessonId ? nextTopicsByLessonId[nextLessonId] ?? [] : [];
+      const nextTopicsForLesson = nextLessonId ? nextTopicsByLessonId[nextLessonId] ?? [] : [];
       const nextTopicId =
-        selectedTopicId && topicsForLesson.some((topic) => topic.id === selectedTopicId)
-          ? selectedTopicId
-          : null;
+        selectedTopicId && nextTopicsForLesson.some((topic) => topic.id === selectedTopicId) ? selectedTopicId : null;
 
       setSelectedLessonId(nextLessonId);
-      setExpandedLessonId(nextLessonId);
       setSelectedTopicId(nextTopicId);
+      setExpandedLessons((previous) => (nextLessonId ? { ...previous, [nextLessonId]: true } : previous));
+      setOpenTopicIdByLessonId((previous) => {
+        if (!nextLessonId) return previous;
+        if (previous[nextLessonId] !== undefined) return previous;
+        return { ...previous, [nextLessonId]: nextTopicsForLesson[0]?.id ?? null };
+      });
 
       if (selectedAssessmentId && !quizzesByModule.some((quiz) => quiz.id === selectedAssessmentId)) {
         setSelectedAssessmentId(null);
@@ -325,6 +279,12 @@ export function ModuleViewerPage() {
     if (!terminalLogBoxRef.current) return;
     terminalLogBoxRef.current.scrollTop = terminalLogBoxRef.current.scrollHeight;
   }, [quizTerminalLogs]);
+
+  const lessonById = useMemo(() => {
+    const map = new Map<number, LessonSummary>();
+    lessons.forEach((lesson) => map.set(lesson.id, lesson));
+    return map;
+  }, [lessons]);
 
   const unlockedLessonIds = useMemo(() => {
     const unlocked = new Set<number>();
@@ -351,6 +311,18 @@ export function ModuleViewerPage() {
   const selectedTopicContent = selectedTopic ? contentByTopicId[selectedTopic.id] ?? [] : [];
   const allLessonsCompleted = lessons.length > 0 && lessons.every((lesson) => lesson.completed);
 
+  useEffect(() => {
+    if (!selectedLesson) return;
+    const topics = topicsByLessonId[selectedLesson.id] ?? [];
+    setOpenTopicIdByLessonId((previous) => {
+      if (previous[selectedLesson.id] !== undefined) return previous;
+      return {
+        ...previous,
+        [selectedLesson.id]: topics[0]?.id ?? null,
+      };
+    });
+  }, [selectedLesson, topicsByLessonId]);
+
   const passedQuizIds = useMemo(() => {
     const passed = new Set<number>();
     results.forEach((result) => {
@@ -361,7 +333,10 @@ export function ModuleViewerPage() {
 
   const latestResultByQuizId = useMemo(() => {
     const latest = new Map<number, QuizResult>();
-    results.forEach((result) => {
+    const ordered = [...results].sort(
+      (a, b) => new Date(b.submitted_at).getTime() - new Date(a.submitted_at).getTime()
+    );
+    ordered.forEach((result) => {
       if (!latest.has(result.quiz_id)) {
         latest.set(result.quiz_id, result);
       }
@@ -369,40 +344,103 @@ export function ModuleViewerPage() {
     return latest;
   }, [results]);
 
-  const preTestsByLessonId = useMemo(() => {
-    const map = new Map<number, QuizSummary[]>();
-    quizzes
-      .filter((quiz) => quiz.quiz_type === 'lesson_quiz' && isPreTest(quiz) && quiz.lesson_id !== null)
-      .forEach((quiz) => {
-        const lessonId = Number(quiz.lesson_id);
-        const existing = map.get(lessonId) ?? [];
-        existing.push(quiz);
-        map.set(lessonId, existing);
-      });
+  const lessonOrderById = useMemo(() => {
+    const map = new Map<number, number>();
+    lessons.forEach((lesson, index) => {
+      map.set(lesson.id, index);
+    });
     return map;
-  }, [quizzes]);
+  }, [lessons]);
 
-  const postTestsByLessonId = useMemo(() => {
-    const map = new Map<number, QuizSummary[]>();
-    quizzes
-      .filter((quiz) => quiz.quiz_type === 'lesson_quiz' && !isPreTest(quiz) && quiz.lesson_id !== null)
-      .forEach((quiz) => {
-        const lessonId = Number(quiz.lesson_id);
-        const existing = map.get(lessonId) ?? [];
-        existing.push(quiz);
-        map.set(lessonId, existing);
+  const preTests = useMemo(() => {
+    return quizzes
+      .filter((quiz) => quiz.quiz_type === 'lesson_quiz' && quiz.stage === 'pre_test')
+      .sort((a, b) => {
+        const orderA = a.lesson_id !== null ? lessonOrderById.get(a.lesson_id) ?? Number.MAX_SAFE_INTEGER : -1;
+        const orderB = b.lesson_id !== null ? lessonOrderById.get(b.lesson_id) ?? Number.MAX_SAFE_INTEGER : -1;
+        if (orderA !== orderB) return orderA - orderB;
+        return a.id - b.id;
       });
+  }, [quizzes, lessonOrderById]);
+
+  const primaryPreTest = preTests[0] ?? null;
+
+  const postTestByLessonId = useMemo(() => {
+    const map = new Map<number, QuizSummary>();
+    const orderedPostTests = quizzes
+      .filter((quiz) => quiz.quiz_type === 'lesson_quiz' && quiz.stage === 'post_test' && quiz.lesson_id !== null)
+      .sort((a, b) => {
+        const orderA = lessonOrderById.get(Number(a.lesson_id)) ?? Number.MAX_SAFE_INTEGER;
+        const orderB = lessonOrderById.get(Number(b.lesson_id)) ?? Number.MAX_SAFE_INTEGER;
+        if (orderA !== orderB) return orderA - orderB;
+        return a.id - b.id;
+      });
+
+    orderedPostTests.forEach((quiz) => {
+      const lessonId = Number(quiz.lesson_id);
+      if (!map.has(lessonId)) {
+        map.set(lessonId, quiz);
+      }
+    });
+
     return map;
-  }, [quizzes]);
+  }, [quizzes, lessonOrderById]);
 
   const finalExam = quizzes.find((quiz) => quiz.quiz_type === 'final_exam') ?? null;
-  const activeLessonQuizzes = quizzes.filter((quiz) => quiz.quiz_type === 'lesson_quiz' && quiz.is_active);
-  const allLessonQuizzesPassed = activeLessonQuizzes.every((quiz) => passedQuizIds.has(quiz.id));
-  const finalExamReady = Boolean(finalExam) && allLessonsCompleted && allLessonQuizzesPassed;
+
+  const activePostTests = useMemo(() => {
+    return Array.from(postTestByLessonId.values()).filter((quiz) => quiz.is_active);
+  }, [postTestByLessonId]);
+
+  const allActivePostTestsPassed = activePostTests.every((quiz) => passedQuizIds.has(quiz.id));
+  const finalExamReady = Boolean(finalExam) && allLessonsCompleted && allActivePostTestsPassed;
+
+  const getAssessmentStage = (quiz: QuizSummary): AssessmentStage => {
+    if (quiz.quiz_type === 'final_exam' || quiz.stage === 'final_exam') return 'final';
+    return quiz.stage === 'pre_test' ? 'pre' : 'post';
+  };
+
+  const isAssessmentUnlocked = (quiz: QuizSummary) => {
+    if (!quiz.is_active) return false;
+    const stage = getAssessmentStage(quiz);
+
+    if (stage === 'pre') return true;
+
+    if (stage === 'post') {
+      if (quiz.lesson_id === null) return false;
+      const lesson = lessonById.get(Number(quiz.lesson_id));
+      if (!lesson) return false;
+      const lessonUnlocked = unlockedLessonIds.has(lesson.id) || lesson.completed;
+      return lessonUnlocked && Boolean(lesson.completed);
+    }
+
+    return finalExamReady;
+  };
+
+  const assessmentUnlockMessage = (quiz: QuizSummary) => {
+    const stage = getAssessmentStage(quiz);
+    if (!quiz.is_active) return 'Assessment is inactive.';
+
+    if (stage === 'pre') {
+      return 'Pre-Test is available before lessons.';
+    }
+
+    if (stage === 'post') {
+      const lesson = quiz.lesson_id !== null ? lessonById.get(Number(quiz.lesson_id)) : null;
+      if (!lesson) return 'Lesson mapping not found.';
+      if (!lesson.completed) return 'Complete the lesson first to unlock this Post-Test.';
+      return 'Ready to start.';
+    }
+
+    if (!allLessonsCompleted) return 'Complete all lessons first.';
+    if (!allActivePostTestsPassed) return 'Pass all active lesson Post-Tests first.';
+    return 'Ready to start.';
+  };
 
   const selectedAssessment = selectedAssessmentId
     ? quizzes.find((quiz) => quiz.id === selectedAssessmentId) ?? null
     : null;
+
   const isQuizOngoing = quizInProgressId !== null && quizSessionResult === null;
   const selectedAssessmentAttemptCount = selectedAssessment
     ? results.filter((result) => result.quiz_id === selectedAssessment.id).length
@@ -413,6 +451,7 @@ export function ModuleViewerPage() {
   const isSelectedAssessmentOngoing = selectedAssessment
     ? isQuizOngoing && quizInProgressId === selectedAssessment.id
     : false;
+
   const currentQuizQuestion = isSelectedAssessmentOngoing ? quizQuestions[quizCurrentIndex] ?? null : null;
   const currentQuizAnswerId = currentQuizQuestion ? quizAnswers[currentQuizQuestion.id] : undefined;
   const isCurrentQuestionSubmitted = currentQuizQuestion
@@ -421,100 +460,117 @@ export function ModuleViewerPage() {
   const submittedQuestionsCount = Object.keys(quizSubmittedByQuestionId).length;
   const selectedAssessmentSessionResult =
     selectedAssessment && quizSessionResult?.quiz_id === selectedAssessment.id ? quizSessionResult : null;
-
-  const isAssessmentUnlocked = (quiz: QuizSummary) => {
-    if (!quiz.is_active) return false;
-    if (quiz.quiz_type === 'final_exam') return finalExamReady;
-    return allLessonsCompleted;
-  };
-
-  const assessmentUnlockMessage = (quiz: QuizSummary) => {
-    if (quiz.quiz_type === 'final_exam') {
-      if (finalExamReady) return 'Ready to take.';
-      if (!allLessonsCompleted) return 'Complete all lessons first.';
-      return 'Pass all active pre/post tests first.';
-    }
-    return allLessonsCompleted
-      ? 'Ready to take.'
-      : 'Unlocks after all lessons are completed.';
-  };
-
-  type SequenceItem =
-    | { key: string; type: 'lesson'; lessonId: number; lesson: LessonSummary; unlocked: boolean }
-    | { key: string; type: 'topic'; lessonId: number; topic: TopicSummary; unlocked: boolean }
-    | { key: string; type: 'assessment'; lessonId: number | null; quiz: QuizSummary; unlocked: boolean };
+  const selectedAssessmentLatestResult =
+    selectedAssessmentSessionResult ??
+    (selectedAssessment ? (latestResultByQuizId.get(selectedAssessment.id) ?? null) : null);
 
   const sequenceItems = useMemo(() => {
     const items: SequenceItem[] = [];
+
+    if (primaryPreTest) {
+      items.push({
+        key: `assessment-${primaryPreTest.id}`,
+        type: 'assessment',
+        quiz: primaryPreTest,
+        stage: 'pre',
+        lesson: primaryPreTest.lesson_id !== null ? lessonById.get(Number(primaryPreTest.lesson_id)) ?? null : null,
+        unlocked: isAssessmentUnlocked(primaryPreTest),
+      });
+    }
+
     lessons.forEach((lesson) => {
       const lessonUnlocked = unlockedLessonIds.has(lesson.id) || lesson.completed;
-      (preTestsByLessonId.get(lesson.id) ?? []).forEach((quiz) => {
-        items.push({
-          key: `assessment-${quiz.id}`,
-          type: 'assessment',
-          lessonId: lesson.id,
-          quiz,
-          unlocked: isAssessmentUnlocked(quiz),
-        });
-      });
+      const topics = topicsByLessonId[lesson.id] ?? [];
 
       items.push({
         key: `lesson-${lesson.id}`,
         type: 'lesson',
-        lessonId: lesson.id,
         lesson,
         unlocked: lessonUnlocked,
       });
 
-      const lessonTopics = topicsByLessonId[lesson.id] ?? [];
-      lessonTopics.forEach((topic) => {
+      topics.forEach((topic, index) => {
         items.push({
           key: `topic-${topic.id}`,
           type: 'topic',
-          lessonId: lesson.id,
+          lesson,
           topic,
+          topicIndex: index + 1,
+          topicCount: topics.length,
           unlocked: lessonUnlocked,
         });
       });
 
-      (postTestsByLessonId.get(lesson.id) ?? []).forEach((quiz) => {
+      const postTest = postTestByLessonId.get(lesson.id);
+      if (postTest) {
         items.push({
-          key: `assessment-${quiz.id}`,
+          key: `assessment-${postTest.id}`,
           type: 'assessment',
-          lessonId: lesson.id,
-          quiz,
-          unlocked: isAssessmentUnlocked(quiz),
+          quiz: postTest,
+          stage: 'post',
+          lesson,
+          unlocked: isAssessmentUnlocked(postTest),
         });
-      });
+      }
     });
 
     if (finalExam) {
       items.push({
         key: `assessment-${finalExam.id}`,
         type: 'assessment',
-        lessonId: null,
         quiz: finalExam,
+        stage: 'final',
+        lesson: null,
         unlocked: isAssessmentUnlocked(finalExam),
       });
     }
 
     return items;
-  }, [lessons, unlockedLessonIds, preTestsByLessonId, topicsByLessonId, postTestsByLessonId, finalExam, isAssessmentUnlocked]);
+  }, [
+    finalExam,
+    isAssessmentUnlocked,
+    lessonById,
+    lessons,
+    postTestByLessonId,
+    primaryPreTest,
+    topicsByLessonId,
+    unlockedLessonIds,
+  ]);
 
   const currentSequenceKey = selectedAssessment
     ? `assessment-${selectedAssessment.id}`
     : selectedTopic
-    ? `topic-${selectedTopic.id}`
-    : selectedLesson
-    ? `lesson-${selectedLesson.id}`
-    : null;
+      ? `topic-${selectedTopic.id}`
+      : selectedLesson
+        ? `lesson-${selectedLesson.id}`
+        : null;
+
   const currentSequenceIndex =
     currentSequenceKey === null ? -1 : sequenceItems.findIndex((item) => item.key === currentSequenceKey);
+
+  const currentSequenceItem = currentSequenceIndex >= 0 ? sequenceItems[currentSequenceIndex] ?? null : null;
   const previousSequenceItem = currentSequenceIndex > 0 ? sequenceItems[currentSequenceIndex - 1] : null;
   const nextSequenceItem =
     currentSequenceIndex >= 0 && currentSequenceIndex < sequenceItems.length - 1
       ? sequenceItems[currentSequenceIndex + 1]
       : null;
+
+  const currentPositionLabel = (() => {
+    if (!currentSequenceItem) return 'Not selected';
+    if (currentSequenceItem.type === 'lesson') {
+      return `Lesson ${currentSequenceItem.lesson.sequence_no} of ${lessons.length}`;
+    }
+    if (currentSequenceItem.type === 'topic') {
+      return `Topic ${currentSequenceItem.topicIndex} of ${currentSequenceItem.topicCount}`;
+    }
+    if (currentSequenceItem.stage === 'pre') return 'Pre-Test';
+    if (currentSequenceItem.stage === 'post') {
+      return currentSequenceItem.lesson
+        ? `Post-Test for Lesson ${currentSequenceItem.lesson.sequence_no}`
+        : 'Post-Test';
+    }
+    return 'Final Exam';
+  })();
 
   const handleCompleteLesson = async (lessonIdValue: number) => {
     if (!enrollment) return;
@@ -553,6 +609,7 @@ export function ModuleViewerPage() {
     try {
       const payload = await startQuiz(enrollment.id, quiz.id);
       setQuizQuestions(payload.questions);
+      setQuizPreviewByQuizId((previous) => ({ ...previous, [quiz.id]: payload.questions }));
       setQuizAnswers({});
       setQuizSubmittedByQuestionId({});
       setQuizCurrentIndex(0);
@@ -580,7 +637,8 @@ export function ModuleViewerPage() {
       return;
     }
     const selectedAnswerText =
-      currentQuizQuestion.answers.find((answer) => answer.id === currentQuizAnswerId)?.answer_text ?? `Answer ${currentQuizAnswerId}`;
+      currentQuizQuestion.answers.find((answer) => answer.id === currentQuizAnswerId)?.answer_text ??
+      `Answer ${currentQuizAnswerId}`;
     const compactAnswerText =
       selectedAnswerText.length > 56 ? `${selectedAnswerText.slice(0, 53).trimEnd()}...` : selectedAnswerText;
     appendTerminalLog(`[q${quizCurrentIndex + 1}] Captured answer -> "${compactAnswerText}"`);
@@ -643,31 +701,48 @@ export function ModuleViewerPage() {
     }
   };
 
-  const selectLesson = (lessonId: number) => {
-    if (isQuizOngoing) return;
-    const shouldCollapse = expandedLessonId === lessonId;
-    setExpandedLessonId(shouldCollapse ? null : lessonId);
-    setSelectedLessonId(lessonId);
+  const toggleLessonExpanded = (lessonIdValue: number) => {
+    setExpandedLessons((previous) => ({ ...previous, [lessonIdValue]: !previous[lessonIdValue] }));
+  };
+
+  const selectLesson = (lesson: LessonSummary) => {
+    const lessonUnlocked = unlockedLessonIds.has(lesson.id) || lesson.completed;
+    if (!lessonUnlocked || isQuizOngoing) return;
+    setSelectedLessonId(lesson.id);
     setSelectedTopicId(null);
     setSelectedAssessmentId(null);
+    setExpandedLessons((previous) => ({ ...previous, [lesson.id]: true }));
+    setOpenTopicIdByLessonId((previous) => {
+      if (previous[lesson.id] !== undefined) return previous;
+      const topics = topicsByLessonId[lesson.id] ?? [];
+      return { ...previous, [lesson.id]: topics[0]?.id ?? null };
+    });
     resetQuizSession();
   };
 
-  const selectTopic = (lessonId: number, topicId: number) => {
-    if (isQuizOngoing) return;
-    setSelectedLessonId(lessonId);
-    setExpandedLessonId(lessonId);
-    setSelectedTopicId(topicId);
+  const selectTopic = (lesson: LessonSummary, topic: TopicSummary) => {
+    const lessonUnlocked = unlockedLessonIds.has(lesson.id) || lesson.completed;
+    if (!lessonUnlocked || isQuizOngoing) return;
+
+    setSelectedLessonId(lesson.id);
+    setSelectedTopicId(topic.id);
     setSelectedAssessmentId(null);
+    setExpandedLessons((previous) => ({ ...previous, [lesson.id]: true }));
+    setOpenTopicIdByLessonId((previous) => ({ ...previous, [lesson.id]: topic.id }));
     resetQuizSession();
   };
 
   const selectAssessment = (quiz: QuizSummary) => {
+    const unlocked = isAssessmentUnlocked(quiz);
+    if (!unlocked && !(isQuizOngoing && quiz.id === quizInProgressId)) return;
     if (isQuizOngoing && quiz.id !== quizInProgressId) return;
+
     if (quiz.lesson_id !== null) {
-      setSelectedLessonId(Number(quiz.lesson_id));
-      setExpandedLessonId(Number(quiz.lesson_id));
+      const lessonId = Number(quiz.lesson_id);
+      setSelectedLessonId(lessonId);
+      setExpandedLessons((previous) => ({ ...previous, [lessonId]: true }));
     }
+
     setSelectedTopicId(null);
     setSelectedAssessmentId(quiz.id);
     if (!isQuizOngoing) {
@@ -676,21 +751,54 @@ export function ModuleViewerPage() {
   };
 
   const goToSequenceItem = (item: SequenceItem | null) => {
-    if (isQuizOngoing) return;
-    if (!item) return;
+    if (!item || isQuizOngoing || !item.unlocked) return;
+
     if (item.type === 'lesson') {
-      setExpandedLessonId(item.lessonId);
-      setSelectedLessonId(item.lessonId);
-      setSelectedTopicId(null);
-      setSelectedAssessmentId(null);
+      selectLesson(item.lesson);
       return;
     }
+
     if (item.type === 'topic') {
-      selectTopic(item.lessonId, item.topic.id);
+      selectTopic(item.lesson, item.topic);
       return;
     }
+
     selectAssessment(item.quiz);
   };
+
+  const selectedLessonFallbackContent =
+    selectedLessonContent.find(
+      (block) => block.body_text.trim().length > 0 || normalizeUrlCandidate(block.content_url) !== null
+    ) ?? null;
+  const selectedLessonDisplayHtmlRaw = (
+    selectedLesson?.overview_text ??
+    selectedLessonFallbackContent?.body_text ??
+    ''
+  ).trim();
+  const selectedLessonDisplayHtml = selectedLessonDisplayHtmlRaw
+    ? sanitizeRichHtml(selectedLessonDisplayHtmlRaw)
+    : '';
+  const selectedLessonDisplayMediaUrl =
+    normalizeUrlCandidate(selectedLesson?.overview_image_url) ??
+    normalizeUrlCandidate(selectedLessonFallbackContent?.content_url);
+
+  const selectedTopicTextBlock =
+    selectedTopicContent.find((block) => block.body_text.trim().length > 0) ?? null;
+  const selectedTopicMediaBlock =
+    selectedTopicContent.find((block) => normalizeUrlCandidate(block.content_url) !== null) ?? null;
+  const selectedTopicDisplayHtmlRaw = (selectedTopicTextBlock?.body_text ?? '').trim();
+  const selectedTopicDisplayHtml = selectedTopicDisplayHtmlRaw
+    ? sanitizeRichHtml(selectedTopicDisplayHtmlRaw)
+    : '';
+  const selectedTopicDisplayMediaUrl = normalizeUrlCandidate(selectedTopicMediaBlock?.content_url);
+  const lessonTitleDisplay = selectedLesson ? `${selectedLesson.sequence_no}.0 ${selectedLesson.title}` : '';
+  const topicTitleDisplay =
+    selectedLesson && selectedTopic
+      ? `${selectedLesson.sequence_no}.0.${selectedTopic.sort_order} ${selectedTopic.title}`
+      : '';
+  const contentTitleDisplay = selectedTopic ? topicTitleDisplay : lessonTitleDisplay;
+  const globalToolbarTitle = selectedAssessment?.title ?? (!selectedLesson ? moduleTitle || 'Module' : '');
+  const isLessonOrTopicView = Boolean(selectedLesson) && !selectedAssessment;
 
   return (
     <section className="space-y-4">
@@ -699,188 +807,263 @@ export function ModuleViewerPage() {
 
       {!isLoading ? (
         <div
-          className={`grid items-stretch gap-5 xl:min-h-[calc(100vh-10rem)] ${
-            isLessonsSidebarOpen ? 'xl:grid-cols-[360px_1fr]' : 'xl:grid-cols-1'
+          className={`grid gap-5 xl:h-[calc(100vh-7.5rem)] ${
+            isSidebarCollapsed ? 'grid-cols-1' : 'xl:grid-cols-[536px_minmax(0,1fr)]'
           }`}
         >
-          {isLessonsSidebarOpen ? (
-            <aside className="h-full space-y-2 rounded-xl border border-white/10 bg-slate-900/70 p-4 shadow-sm">
-              <div className="rounded-lg border border-white/10 bg-white/5 p-3">
-                <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">
-                  Module {moduleIdNumber || '--'}
-                </p>
-                <p className="mt-1 text-sm font-semibold text-white">{moduleTitle || 'Untitled Module'}</p>
-                <div className="mt-2 flex items-center justify-between text-[11px] text-slate-400">
-                  <span>Progress</span>
-                  <span className="font-semibold text-brand-300">{completionPercent}%</span>
-                </div>
-                <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-800/70">
-                  <div
-                    className="h-full rounded-full bg-brand-500"
-                    style={{ width: `${Math.max(0, Math.min(100, completionPercent))}%` }}
-                  />
-                </div>
+          {!isSidebarCollapsed ? (
+            <aside className="no-scrollbar rounded-xl border border-white/10 bg-slate-900/70 p-5 shadow-sm xl:sticky xl:top-20 xl:h-[calc(100vh-7.5rem)] xl:overflow-y-auto">
+            <div className="rounded-xl border border-white/10 bg-white/5 p-4">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">
+                Module {moduleIdNumber || '--'}
+              </p>
+              <p className="mt-1 text-base font-semibold text-white">{moduleTitle || 'Untitled Module'}</p>
+              <div className="mt-3 flex items-center justify-between text-[11px] text-slate-400">
+                <span>Progress</span>
+                <span className="font-semibold text-brand-300">{completionPercent}%</span>
               </div>
-
-              <div className="mb-1 flex items-center justify-between">
-                <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Learning Sequence</p>
-                <button
-                  onClick={() => setIsLessonsSidebarOpen(false)}
-                  className="rounded-md border border-white/20 p-1 text-slate-300 hover:bg-white/5"
-                  aria-label="Collapse lessons sidebar"
-                >
-                  <PanelLeftClose size={14} />
-                </button>
+              <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-800/70">
+                <div
+                  className="h-full rounded-full bg-brand-500"
+                  style={{ width: `${Math.max(0, Math.min(100, completionPercent))}%` }}
+                />
               </div>
+            </div>
 
-              {lessons.map((lesson) => {
-                const lessonUnlocked = unlockedLessonIds.has(lesson.id) || lesson.completed;
-                const lessonTopics = topicsByLessonId[lesson.id] ?? [];
-                const lessonPreTests = preTestsByLessonId.get(lesson.id) ?? [];
-                const lessonPostTests = postTestsByLessonId.get(lesson.id) ?? [];
+            <div className="mt-5">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Learning Sequence</p>
 
-                return (
-                  <div key={lesson.id} className="space-y-2">
-                    {lessonPreTests.map((quiz) => {
-                      const latest = latestResultByQuizId.get(quiz.id);
-                      return (
-                        <button
-                          key={quiz.id}
-                          disabled={isQuizOngoing && quizInProgressId !== quiz.id}
-                          onClick={() => selectAssessment(quiz)}
-                          className={`w-full rounded-md border px-3 py-2 text-left text-sm disabled:cursor-not-allowed disabled:opacity-60 ${
-                            selectedAssessmentId === quiz.id ? 'border-white/20 bg-white/5' : 'border-white/10 bg-slate-900/70'
-                          }`}
-                        >
-                          <p className="font-semibold text-white">Pre Test: {quiz.title}</p>
-                          <p className="mt-1 text-xs text-slate-300">
-                            {latest ? `Latest ${Number(latest.score)}% (${latest.passed ? 'Passed' : 'Failed'})` : 'No attempts yet'}
-                          </p>
-                        </button>
-                      );
-                    })}
-
+              <div className="mt-3 space-y-3">
+                {primaryPreTest ? (
+                  <div className="relative pl-8">
+                    {lessons.length > 0 || finalExam ? (
+                      <span className="absolute left-[13px] top-7 h-[calc(100%-0.25rem)] w-px bg-white/10" aria-hidden="true" />
+                    ) : null}
                     <button
-                      disabled={!lessonUnlocked || isQuizOngoing}
-                      onClick={() => selectLesson(lesson.id)}
-                      className={`w-full rounded-md border px-3 py-2 text-left text-sm disabled:cursor-not-allowed disabled:opacity-60 ${
-                        selectedAssessmentId === null && selectedLessonId === lesson.id ? 'border-brand-500/40 bg-brand-500/10' : 'border-white/10 bg-slate-900/70'
+                      type="button"
+                      disabled={!isAssessmentUnlocked(primaryPreTest) || (isQuizOngoing && quizInProgressId !== primaryPreTest.id)}
+                      onClick={() => selectAssessment(primaryPreTest)}
+                      className={`w-full rounded-lg border px-4 py-3 text-left transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                        selectedAssessmentId === primaryPreTest.id
+                          ? 'border-violet-400/50 bg-violet-500/10'
+                          : 'border-violet-400/20 bg-violet-950/20 hover:bg-violet-500/10'
                       }`}
                     >
-                      <div className="flex items-start gap-2">
-                        <span
-                          className={`mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full border ${
-                            lesson.completed ? 'border-brand-500 bg-brand-600 text-white' : 'border-slate-400 bg-slate-900/70 text-slate-400'
-                          }`}
-                          aria-hidden="true"
+                      <span className="absolute left-0.5 top-2 inline-flex h-6 w-6 items-center justify-center rounded-full border border-violet-400/40 bg-violet-500/20 text-violet-200">
+                        <ClipboardList size={13} />
+                      </span>
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-violet-200">Pre-Test</p>
+                      <p className="mt-0.5 text-[15px] font-semibold text-white">{primaryPreTest.title}</p>
+                      <p className="mt-1 text-[12px] text-slate-300">
+                        {(() => {
+                          const latest = latestResultByQuizId.get(primaryPreTest.id);
+                          if (!latest) return 'No attempts yet';
+                          return `Latest ${Number(latest.score)}% (${latest.passed ? 'Passed' : 'Failed'})`;
+                        })()}
+                      </p>
+                    </button>
+                  </div>
+                ) : null}
+
+                {lessons.map((lesson, lessonIndex) => {
+                  const lessonUnlocked = unlockedLessonIds.has(lesson.id) || lesson.completed;
+                  const lessonTopics = topicsByLessonId[lesson.id] ?? [];
+                  const lessonPostTest = postTestByLessonId.get(lesson.id) ?? null;
+                  const isExpanded = Boolean(expandedLessons[lesson.id]);
+
+                  const lessonStatus = lesson.completed
+                    ? 'Done'
+                    : lessonUnlocked
+                      ? 'In Progress'
+                      : 'Locked';
+
+                  const isLastTopLevel = lessonIndex === lessons.length - 1 && !finalExam;
+
+                  return (
+                    <div key={lesson.id} className="relative pl-8">
+                      {!isLastTopLevel ? (
+                        <span className="absolute left-[13px] top-7 h-[calc(100%-0.25rem)] w-px bg-white/10" aria-hidden="true" />
+                      ) : null}
+
+                      <div
+                        className={`rounded-lg border transition ${
+                          selectedAssessmentId === null && selectedLessonId === lesson.id && !selectedTopicId
+                            ? 'border-sky-400/50 bg-sky-500/10'
+                            : 'border-sky-400/20 bg-sky-950/20 hover:bg-sky-500/10'
+                        } ${lessonUnlocked ? '' : 'opacity-60'}`}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => selectLesson(lesson)}
+                          disabled={!lessonUnlocked || isQuizOngoing}
+                          className="flex w-full items-start justify-between gap-3 px-4 py-3 text-left disabled:cursor-not-allowed"
                         >
-                          {lesson.completed ? <Check size={12} strokeWidth={3} /> : null}
-                        </span>
-                        <div>
-                          <p className="font-semibold text-white">{lesson.title}</p>
-                          <p className="mt-1 text-xs text-slate-300">Estimated time: {formatMinutesLabel(lesson.estimated_minutes)}</p>
-                          <p className="mt-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
-                            {lesson.completed ? 'Completed' : lessonUnlocked ? 'Unlocked' : 'Locked'}
-                          </p>
+                          <span className="absolute left-0.5 top-2 inline-flex h-6 w-6 items-center justify-center rounded-full border border-sky-400/40 bg-sky-500/20 text-sky-200">
+                            {lessonUnlocked ? <Check size={13} /> : <Lock size={13} />}
+                          </span>
+                          <div className="min-w-0">
+                            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-sky-200">
+                              Lesson {lesson.sequence_no}
+                            </p>
+                            <p className="truncate text-[15px] font-semibold text-white">{lesson.title}</p>
+                            <p className="mt-1 text-[12px] text-slate-300">{formatMinutesLabel(lesson.estimated_minutes)}</p>
+                          </div>
+                          <StatusPill
+                            text={lessonStatus}
+                            className={
+                              lesson.completed
+                                ? 'border-emerald-300/30 bg-emerald-500/10 text-emerald-200'
+                                : lessonUnlocked
+                                  ? 'border-sky-300/30 bg-sky-500/10 text-sky-200'
+                                  : 'border-slate-400/30 bg-slate-700/30 text-slate-300'
+                            }
+                          />
+                        </button>
+                        <div className="border-t border-white/10 px-3 py-2">
+                          <button
+                            type="button"
+                            onClick={() => toggleLessonExpanded(lesson.id)}
+                            className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-semibold text-slate-300 hover:bg-white/5"
+                          >
+                            {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                            {isExpanded ? 'Collapse' : 'Expand'}
+                          </button>
                         </div>
                       </div>
-                    </button>
 
-                    {expandedLessonId === lesson.id ? (
-                      <div className="space-y-1 pl-4">
-                        {lessonTopics.map((topic) => {
-                          const topicCompleted = topic.completed ?? lesson.completed;
-                          return (
+                      {isExpanded ? (
+                        <div className="ml-1 mt-2 space-y-2 border-l border-white/10 pl-3">
+                          {lessonTopics.map((topic) => {
+                            const topicActive = selectedAssessmentId === null && selectedTopicId === topic.id;
+                            return (
+                              <button
+                                key={topic.id}
+                                type="button"
+                                disabled={!lessonUnlocked || isQuizOngoing}
+                                onClick={() => selectTopic(lesson, topic)}
+                                className={`flex w-full items-center gap-2 rounded-md border px-3 py-2.5 text-left text-sm disabled:cursor-not-allowed disabled:opacity-50 ${
+                                  topicActive
+                                    ? 'border-sky-400/40 bg-sky-500/10 text-sky-100'
+                                    : 'border-white/10 bg-slate-900/60 text-slate-200 hover:bg-white/5'
+                                }`}
+                              >
+                                <span className="inline-flex h-2 w-2 shrink-0 rounded-full bg-slate-300" />
+                                <span className="truncate">{topic.title}</span>
+                              </button>
+                            );
+                          })}
+
+                          {lessonTopics.length === 0 ? (
+                            <p className="rounded-md border border-white/10 bg-slate-900/60 px-2.5 py-2 text-xs text-slate-400">
+                              No topics available.
+                            </p>
+                          ) : null}
+
+                          {lessonPostTest ? (
                             <button
-                              key={topic.id}
-                              disabled={!lessonUnlocked || isQuizOngoing}
-                              onClick={() => selectTopic(lesson.id, topic.id)}
-                              className={`w-full rounded-md border px-3 py-2 text-left text-xs disabled:cursor-not-allowed disabled:opacity-60 ${
-                                selectedAssessmentId === null && selectedTopicId === topic.id
-                                  ? 'border-brand-500/40 bg-brand-500/10 text-brand-200'
-                                  : 'border-white/10 bg-slate-900/70 text-slate-200'
+                              type="button"
+                              disabled={!isAssessmentUnlocked(lessonPostTest) || (isQuizOngoing && quizInProgressId !== lessonPostTest.id)}
+                              onClick={() => selectAssessment(lessonPostTest)}
+                            className={`mt-1 flex w-full items-start gap-2 rounded-md border px-3 py-2.5 text-left text-sm disabled:cursor-not-allowed disabled:opacity-50 ${
+                                selectedAssessmentId === lessonPostTest.id
+                                  ? 'border-orange-400/50 bg-orange-500/10 text-orange-100'
+                                  : 'border-orange-400/25 bg-orange-950/20 text-orange-100 hover:bg-orange-500/10'
                               }`}
                             >
-                              <div className="flex items-start gap-2">
-                                <span
-                                  className={`mt-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-full border ${
-                                    topicCompleted ? 'border-brand-500 bg-brand-600 text-white' : 'border-slate-400 bg-slate-900/70 text-slate-400'
-                                  }`}
-                                  aria-hidden="true"
-                                >
-                                  {topicCompleted ? <Check size={10} strokeWidth={3} /> : null}
+                              <span className="mt-0.5 inline-flex h-2 w-2 shrink-0 rounded-full bg-orange-300" />
+                              <span className="min-w-0">
+                                <span className="block truncate font-semibold">Post-Test: {lessonPostTest.title}</span>
+                                <span className="mt-0.5 block text-xs text-slate-300">
+                                  {(() => {
+                                    const latest = latestResultByQuizId.get(lessonPostTest.id);
+                                    if (!latest) return 'No attempts yet';
+                                    return `Latest ${Number(latest.score)}% (${latest.passed ? 'Passed' : 'Failed'})`;
+                                  })()}
                                 </span>
-                                <p className="font-medium">{topic.title}</p>
-                              </div>
+                              </span>
                             </button>
-                          );
-                        })}
-                        {lessonTopics.length === 0 ? (
-                          <p className="rounded-md border border-white/10 bg-slate-900/70 px-3 py-2 text-xs text-slate-400">
-                            No topics in this lesson yet.
-                          </p>
-                        ) : null}
-                      </div>
-                    ) : null}
+                          ) : (
+                            <p className="mt-1 rounded-md border border-white/10 bg-slate-900/60 px-3 py-2.5 text-sm text-slate-400">
+                              No Post-Test configured.
+                            </p>
+                          )}
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })}
 
-                    {lessonPostTests.map((quiz) => {
-                      const latest = latestResultByQuizId.get(quiz.id);
-                      return (
-                        <button
-                          key={quiz.id}
-                          disabled={isQuizOngoing && quizInProgressId !== quiz.id}
-                          onClick={() => selectAssessment(quiz)}
-                          className={`w-full rounded-md border px-3 py-2 text-left text-sm disabled:cursor-not-allowed disabled:opacity-60 ${
-                            selectedAssessmentId === quiz.id ? 'border-white/20 bg-white/5' : 'border-white/10 bg-slate-900/70'
-                          }`}
-                        >
-                          <p className="font-semibold text-white">Post Test: {quiz.title}</p>
-                          <p className="mt-1 text-xs text-slate-300">
-                            {latest ? `Latest ${Number(latest.score)}% (${latest.passed ? 'Passed' : 'Failed'})` : 'No attempts yet'}
-                          </p>
-                        </button>
-                      );
-                    })}
+                {finalExam ? (
+                  <div className="relative pl-8">
+                    <button
+                      type="button"
+                      disabled={!isAssessmentUnlocked(finalExam) || (isQuizOngoing && quizInProgressId !== finalExam.id)}
+                      onClick={() => selectAssessment(finalExam)}
+                      className={`w-full rounded-lg border px-4 py-3 text-left transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                        selectedAssessmentId === finalExam.id
+                          ? 'border-amber-400/50 bg-amber-500/10'
+                          : 'border-amber-400/25 bg-amber-950/20 hover:bg-amber-500/10'
+                      }`}
+                    >
+                      <span className="absolute left-0.5 top-2 inline-flex h-6 w-6 items-center justify-center rounded-full border border-amber-400/40 bg-amber-500/20 text-amber-200">
+                        {isAssessmentUnlocked(finalExam) ? <Award size={13} /> : <Lock size={13} />}
+                      </span>
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-amber-200">Final Exam</p>
+                      <p className="mt-0.5 text-[15px] font-semibold text-white">{finalExam.title}</p>
+                      <p className="mt-1 text-[12px] text-slate-300">{assessmentUnlockMessage(finalExam)}</p>
+                    </button>
                   </div>
-                );
-              })}
-
-              {finalExam ? (
-                <button
-                  disabled={isQuizOngoing && quizInProgressId !== finalExam.id}
-                  onClick={() => selectAssessment(finalExam)}
-                  className={`mt-1 w-full rounded-md border px-3 py-2 text-left text-sm disabled:cursor-not-allowed disabled:opacity-60 ${
-                    selectedAssessmentId === finalExam.id ? 'border-white/20 bg-white/5' : 'border-white/10 bg-slate-900/70'
-                  }`}
-                >
-                  <p className="font-semibold text-white">Final Exam: {finalExam.title}</p>
-                  <p className="mt-1 text-xs text-slate-300">{assessmentUnlockMessage(finalExam)}</p>
-                </button>
-              ) : null}
+                ) : null}
+              </div>
+            </div>
             </aside>
           ) : null}
 
-          <div className="flex h-full min-h-0 flex-col gap-4">
-            <div className="flex flex-1 flex-col gap-4">
-            {!isLessonsSidebarOpen ? (
-              <button
-                onClick={() => setIsLessonsSidebarOpen(true)}
-                className="inline-flex items-center gap-2 rounded-md border border-white/20 bg-slate-900/70 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-white/5"
-              >
-                <PanelLeftOpen size={14} />
-                Show Sequence
-              </button>
+          <div
+            className={`flex min-h-0 flex-col xl:sticky xl:top-20 xl:h-[calc(100vh-7.5rem)] xl:overflow-hidden ${
+              isLessonOrTopicView ? 'gap-0' : 'gap-4'
+            }`}
+          >
+            {isLessonOrTopicView ? (
+              <div className="z-20 flex items-center gap-3 rounded-t-xl rounded-b-none border border-white/10 bg-slate-900/70 px-3 py-2.5 shadow-sm">
+                <button
+                  type="button"
+                  onClick={() => setIsSidebarCollapsed((previous) => !previous)}
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-white/15 text-slate-200 hover:bg-white/10"
+                  aria-label={isSidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'}
+                  title={isSidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'}
+                >
+                  {isSidebarCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
+                </button>
+                <p className="truncate text-[28px] leading-none text-slate-100">{contentTitleDisplay || moduleTitle || 'Module'}</p>
+              </div>
             ) : null}
 
+            {!isLessonOrTopicView ? (
+              <div className="flex items-center gap-3 rounded-xl border border-white/10 bg-slate-900/70 px-3 py-2.5 shadow-sm">
+                <button
+                  type="button"
+                  onClick={() => setIsSidebarCollapsed((previous) => !previous)}
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-white/15 text-slate-200 hover:bg-white/10"
+                  aria-label={isSidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'}
+                  title={isSidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'}
+                >
+                  {isSidebarCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
+                </button>
+                <p className="truncate text-[28px] leading-none text-slate-100">{globalToolbarTitle}</p>
+              </div>
+            ) : null}
+
+            <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto pr-1 xl:overscroll-contain">
             {selectedAssessment ? (
-              <div className="flex flex-1 min-h-0 items-stretch py-2">
+              <div className="flex h-full min-h-full items-stretch">
                 {isQuizLoading ? (
                   <article className="flex h-full w-full items-center justify-center rounded-2xl border border-white/10 bg-slate-900/70 p-6 shadow-sm md:p-8">
                     <p className="text-sm text-slate-300">Preparing assessment...</p>
                   </article>
                 ) : isResultProcessing ? (
-                  <article className="w-full overflow-hidden rounded-2xl border border-slate-700 bg-slate-950 shadow-sm">
-                    <div className="grid h-full min-h-[620px] lg:grid-cols-[1fr_420px]">
+                  <article className="h-full w-full overflow-hidden rounded-2xl border border-slate-700 bg-slate-950 shadow-sm">
+                    <div className="grid h-full lg:grid-cols-[1fr_420px]">
                       <div className="flex flex-col justify-center p-8 text-brand-100">
                         <div className="mx-auto w-full max-w-2xl text-center">
                           <div className="inline-flex items-center gap-2 rounded-full border border-brand-500/40 bg-brand-500/10 px-3 py-1 text-xs font-semibold uppercase tracking-wider">
@@ -893,98 +1076,12 @@ export function ModuleViewerPage() {
                           </p>
                         </div>
                       </div>
-                      <aside className="border-t border-slate-700 bg-black/40 p-5 font-mono text-xs text-brand-100 lg:border-l lg:border-t-0">
+                      <aside className="flex min-h-0 flex-col border-t border-slate-700 bg-black/40 p-5 font-mono text-xs text-brand-100 lg:border-l lg:border-t-0">
                         <div className="mb-4 flex items-center gap-2 border-b border-white/10 pb-3 text-brand-300">
                           <Cpu size={14} />
                           <span className="uppercase tracking-wider">Assessment Terminal</span>
                         </div>
-                        <div ref={terminalLogBoxRef} className="space-y-2 overflow-hidden">
-                          {quizTerminalLogs.map((log, index) => (
-                            <p key={`${log}-${index}`} className="leading-relaxed text-brand-100/90">
-                              {log}
-                            </p>
-                          ))}
-                        </div>
-                      </aside>
-                    </div>
-                  </article>
-                ) : selectedAssessmentSessionResult ? (
-                  <article className="w-full overflow-hidden rounded-2xl border border-slate-700 bg-slate-950 shadow-sm">
-                    <div className="grid h-full min-h-[620px] lg:grid-cols-[1fr_420px]">
-                      <div className="flex flex-col justify-center p-8 text-brand-100">
-                      {(() => {
-                        const score = Math.max(0, Math.min(100, Number(selectedAssessmentSessionResult.score)));
-                        const radius = 56;
-                        const circumference = 2 * Math.PI * radius;
-                        const offset = circumference - (score / 100) * circumference;
-                        const passed = selectedAssessmentSessionResult.passed;
-                        return (
-                          <div className="mx-auto w-full max-w-2xl text-center">
-                            <p className="text-xs font-semibold uppercase tracking-wider text-brand-300">Assessment Result</p>
-                            <h3 className="mt-2 text-2xl font-bold text-white md:text-3xl">{selectedAssessment.title}</h3>
-                            <div className="mt-6 flex justify-center">
-                              <div className="relative inline-flex items-center justify-center">
-                                <svg width="152" height="152" className="-rotate-90">
-                                  <circle cx="76" cy="76" r={radius} fill="none" stroke="#1f2937" strokeWidth="12" />
-                                  <circle
-                                    cx="76"
-                                    cy="76"
-                                    r={radius}
-                                    fill="none"
-                                    stroke={passed ? '#22c55e' : '#ef4444'}
-                                    strokeWidth="12"
-                                    strokeDasharray={circumference}
-                                    strokeDashoffset={offset}
-                                    strokeLinecap="round"
-                                  />
-                                </svg>
-                                <div className="absolute text-center">
-                                  <p className="text-3xl font-bold text-white">{score.toFixed(0)}%</p>
-                                  <p className="text-xs font-semibold uppercase tracking-wider text-brand-300/80">Score</p>
-                                </div>
-                              </div>
-                            </div>
-                            <div className="mt-5 inline-flex items-center gap-2 rounded-full border border-brand-500/30 bg-brand-500/10 px-3 py-1.5 text-sm font-semibold text-brand-100">
-                              {passed ? <CheckCircle2 size={16} className="text-brand-300" /> : <XCircle size={16} className="text-rose-300" />}
-                              {passed ? 'Passed' : 'Failed'} - Attempt #{selectedAssessmentSessionResult.attempt_no}
-                            </div>
-                            <div className="mx-auto mt-5 grid max-w-md grid-cols-2 gap-3 text-left">
-                              <div className="rounded-lg border border-white/10 bg-white/5 p-3">
-                                <p className="text-[11px] uppercase tracking-wider text-brand-300/80">Passing Score</p>
-                                <p className="mt-1 text-lg font-semibold text-white">{selectedAssessment.passing_score}%</p>
-                              </div>
-                              <div className="rounded-lg border border-white/10 bg-white/5 p-3">
-                                <p className="text-[11px] uppercase tracking-wider text-brand-300/80">Time Limit</p>
-                                <p className="mt-1 text-lg font-semibold text-white">{selectedAssessment.time_limit_minutes} min</p>
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })()}
-                        <div className="mt-6 flex flex-wrap items-center justify-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => setQuizSessionResult(null)}
-                            className="rounded-md border border-white/20 px-4 py-2 text-sm font-semibold text-brand-100 hover:bg-white/5"
-                          >
-                            Close Result
-                          </button>
-                          <button
-                            type="button"
-                            disabled={!isAssessmentUnlocked(selectedAssessment) || selectedAssessmentAttemptsRemaining <= 0}
-                            onClick={() => void handleStartQuiz(selectedAssessment)}
-                            className="rounded-md bg-brand-500 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
-                          >
-                            {selectedAssessmentAttemptsRemaining > 0 ? 'Retake Assessment' : 'No Attempts Remaining'}
-                          </button>
-                        </div>
-                      </div>
-                      <aside className="border-t border-slate-700 bg-black/40 p-5 font-mono text-xs text-brand-100 lg:border-l lg:border-t-0">
-                        <div className="mb-4 flex items-center gap-2 border-b border-white/10 pb-3 text-brand-300">
-                          <Cpu size={14} />
-                          <span className="uppercase tracking-wider">Assessment Terminal</span>
-                        </div>
-                        <div ref={terminalLogBoxRef} className="space-y-2 overflow-hidden">
+                        <div ref={terminalLogBoxRef} className="no-scrollbar min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
                           {quizTerminalLogs.map((log, index) => (
                             <p key={`${log}-${index}`} className="leading-relaxed text-brand-100/90">
                               {log}
@@ -995,11 +1092,11 @@ export function ModuleViewerPage() {
                     </div>
                   </article>
                 ) : isSelectedAssessmentOngoing ? (
-                  <article className="w-full overflow-hidden rounded-2xl border border-white/10 bg-slate-900/70 shadow-sm">
-                    <div className="grid h-full min-h-[620px] lg:grid-cols-[1fr_420px]">
+                  <article className="h-full w-full overflow-hidden rounded-2xl border border-white/10 bg-slate-900/70 shadow-sm">
+                    <div className="grid h-full lg:grid-cols-[minmax(0,1fr)_360px]">
                       <div className="flex h-full p-6 md:p-8">
                         <div className="mx-auto flex h-full w-full max-w-4xl flex-col">
-                          <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex flex-wrap items-center justify-between gap-3">
                             <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/10 px-3 py-1 text-xs font-semibold uppercase tracking-wider text-slate-200">
                               <HelpCircle size={14} />
                               Question {quizCurrentIndex + 1} of {quizQuestions.length}
@@ -1008,6 +1105,7 @@ export function ModuleViewerPage() {
                               Submitted {submittedQuestionsCount} / {quizQuestions.length}
                             </p>
                           </div>
+
                           {currentQuizQuestion ? (
                             <>
                               <div className="mt-6 flex flex-1 flex-col">
@@ -1025,15 +1123,20 @@ export function ModuleViewerPage() {
                                         }))
                                       }
                                       className={`flex w-full items-center justify-between rounded-lg border px-5 py-4 text-left text-base font-medium disabled:cursor-not-allowed disabled:opacity-70 ${
-                                        currentQuizAnswerId === answer.id ? 'border-slate-400 bg-white/5' : 'border-white/10 bg-slate-900/70 hover:bg-white/5'
+                                        currentQuizAnswerId === answer.id
+                                          ? 'border-slate-400 bg-white/5'
+                                          : 'border-white/10 bg-slate-900/70 hover:bg-white/5'
                                       }`}
                                     >
                                       <span>{answer.answer_text}</span>
-                                      {currentQuizAnswerId === answer.id ? <CheckCircle2 size={18} className="text-brand-400" /> : null}
+                                      {currentQuizAnswerId === answer.id ? (
+                                        <CheckCircle2 size={18} className="text-brand-400" />
+                                      ) : null}
                                     </button>
                                   ))}
                                 </div>
                               </div>
+
                               <div className="mt-auto flex flex-wrap items-center justify-between gap-3 border-t border-white/10 pt-6">
                                 <p className="text-sm text-slate-400">
                                   {isCurrentQuestionSubmitted
@@ -1044,9 +1147,10 @@ export function ModuleViewerPage() {
                                   type="button"
                                   disabled={isCurrentQuestionSubmitted || isQuizSubmitting || !currentQuizAnswerId}
                                   onClick={handleSubmitCurrentQuestion}
-                                  className="rounded-md bg-slate-900 px-7 py-3 text-base font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+                                  className="inline-flex items-center gap-2 rounded-lg border border-cyan-300/60 bg-cyan-500 px-7 py-3 text-base font-semibold text-slate-950 shadow-[0_0_0_1px_rgba(34,211,238,0.35),0_10px_24px_rgba(6,182,212,0.35)] transition hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-60"
                                 >
                                   {quizCurrentIndex >= quizQuestions.length - 1 ? 'Submit Answer' : 'Submit Answer & Next'}
+                                  <ChevronRight size={16} />
                                 </button>
                               </div>
                             </>
@@ -1057,12 +1161,96 @@ export function ModuleViewerPage() {
                           )}
                         </div>
                       </div>
-                      <aside className="border-t border-slate-700 bg-slate-950 p-5 font-mono text-xs text-brand-100 lg:border-l lg:border-t-0">
+
+                      <aside className="flex min-h-0 flex-col border-t border-slate-700 bg-slate-950 p-5 font-mono text-xs text-brand-100 lg:border-l lg:border-t-0">
                         <div className="mb-4 flex items-center gap-2 border-b border-white/10 pb-3 text-brand-300">
                           <Cpu size={14} />
                           <span className="uppercase tracking-wider">Live Terminal</span>
                         </div>
-                        <div ref={terminalLogBoxRef} className="space-y-2 overflow-hidden">
+                        <div className="mb-3 grid grid-cols-2 gap-2 text-[10px]">
+                          <div className="rounded border border-white/10 bg-white/5 px-2 py-1 text-slate-300">
+                            Q {quizCurrentIndex + 1}/{quizQuestions.length}
+                          </div>
+                          <div className="rounded border border-white/10 bg-white/5 px-2 py-1 text-slate-300">
+                            Submitted {submittedQuestionsCount}
+                          </div>
+                        </div>
+                        <div ref={terminalLogBoxRef} className="no-scrollbar min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
+                          {quizTerminalLogs.map((log, index) => (
+                            <p key={`${log}-${index}`} className="leading-relaxed text-brand-100/90">
+                              {log}
+                            </p>
+                          ))}
+                        </div>
+                      </aside>
+                    </div>
+                  </article>
+                ) : selectedAssessmentSessionResult ? (
+                  <article className="h-full w-full overflow-hidden rounded-2xl border border-cyan-400/30 bg-slate-950 shadow-sm">
+                    <div className="grid h-full lg:grid-cols-[minmax(0,1fr)_360px]">
+                      <div className="flex h-full flex-col justify-center p-6 md:p-10">
+                        <p className="font-mono text-xs font-semibold uppercase tracking-[0.18em] text-cyan-300">
+                          Assessment Complete
+                        </p>
+                        <h3 className="mt-3 text-3xl font-bold text-white md:text-4xl">
+                          {selectedAssessmentSessionResult.passed ? 'Quiz Passed' : 'Quiz Failed'}
+                        </h3>
+                        <p className="mt-2 text-sm text-slate-300">
+                          {selectedAssessment.title} evaluation finished. Review your score and continue to the next learning step.
+                        </p>
+
+                        <div className="mt-6 grid gap-3 sm:grid-cols-3">
+                          <div className="rounded-lg border border-white/10 bg-white/5 p-4">
+                            <p className="font-mono text-[11px] uppercase tracking-wider text-slate-400">Score</p>
+                            <p className="mt-1 text-2xl font-bold text-cyan-300">{Number(selectedAssessmentSessionResult.score)}%</p>
+                          </div>
+                          <div className="rounded-lg border border-white/10 bg-white/5 p-4">
+                            <p className="font-mono text-[11px] uppercase tracking-wider text-slate-400">Passing</p>
+                            <p className="mt-1 text-2xl font-bold text-white">{selectedAssessment.passing_score}%</p>
+                          </div>
+                          <div className="rounded-lg border border-white/10 bg-white/5 p-4">
+                            <p className="font-mono text-[11px] uppercase tracking-wider text-slate-400">Attempt</p>
+                            <p className="mt-1 text-2xl font-bold text-white">#{selectedAssessmentSessionResult.attempt_no}</p>
+                          </div>
+                        </div>
+
+                        <div className="mt-5">
+                          <StatusPill
+                            text={selectedAssessmentSessionResult.passed ? 'Passed' : 'Failed'}
+                            className={
+                              selectedAssessmentSessionResult.passed
+                                ? 'border-emerald-300/30 bg-emerald-500/10 text-emerald-200'
+                                : 'border-rose-300/30 bg-rose-500/10 text-rose-200'
+                            }
+                          />
+                        </div>
+
+                        <div className="mt-6 flex flex-wrap items-center gap-3">
+                          <button
+                            type="button"
+                            disabled={
+                              selectedAssessmentAttemptsRemaining <= 0 ||
+                              isQuizSubmitting ||
+                              isQuizLoading
+                            }
+                            onClick={() => void handleStartQuiz(selectedAssessment)}
+                            className="inline-flex items-center gap-2 rounded-lg border border-cyan-300/60 bg-cyan-500 px-6 py-3 text-sm font-semibold text-slate-950 shadow-[0_0_0_1px_rgba(34,211,238,0.35),0_10px_24px_rgba(6,182,212,0.35)] transition hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            <CirclePlay size={16} />
+                            Take Quiz Again
+                          </button>
+                          <p className="text-sm text-slate-300">
+                            Remaining attempts: {selectedAssessmentAttemptsRemaining}
+                          </p>
+                        </div>
+                      </div>
+
+                      <aside className="flex min-h-0 flex-col border-t border-slate-700 bg-black/40 p-5 font-mono text-xs text-brand-100 lg:border-l lg:border-t-0">
+                        <div className="mb-4 flex items-center gap-2 border-b border-white/10 pb-3 text-brand-300">
+                          <Cpu size={14} />
+                          <span className="uppercase tracking-wider">Result Terminal</span>
+                        </div>
+                        <div ref={terminalLogBoxRef} className="no-scrollbar min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
                           {quizTerminalLogs.map((log, index) => (
                             <p key={`${log}-${index}`} className="leading-relaxed text-brand-100/90">
                               {log}
@@ -1074,75 +1262,92 @@ export function ModuleViewerPage() {
                   </article>
                 ) : (
                   (() => {
-                    const meta = assessmentMeta(selectedAssessment);
+                    const stage = getAssessmentStage(selectedAssessment);
+                    const meta = assessmentViewMeta[stage];
                     const AssessmentIcon = meta.icon;
+                    const latest = selectedAssessmentLatestResult;
+                    const unlocked = isAssessmentUnlocked(selectedAssessment);
+
                     return (
-                      <article className={`flex h-full w-full flex-col rounded-2xl border bg-slate-900/70 p-6 shadow-sm md:p-8 ${meta.border}`}>
-                        <div className="flex flex-1 flex-col justify-center">
-                          <div className="mx-auto w-full max-w-3xl text-center">
-                            <div className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-wider ${meta.surface} ${meta.border} ${meta.accent}`}>
-                              <AssessmentIcon size={14} />
-                              {meta.label}
+                      <article className="h-full w-full overflow-hidden rounded-2xl border border-cyan-400/30 bg-slate-950 shadow-sm">
+                        <div className="grid h-full lg:grid-cols-[minmax(0,1fr)_320px]">
+                          <div className="flex h-full flex-col justify-center p-6 md:p-10">
+                            <div className="inline-flex items-center gap-2">
+                              <span className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-cyan-300/50 bg-cyan-500/10 text-cyan-200">
+                                <AssessmentIcon size={20} />
+                              </span>
+                              <span className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-wider ${meta.chipClass}`}>
+                                {meta.label}
+                              </span>
+                              {!unlocked ? (
+                                <span className="inline-flex items-center gap-1 rounded-full border border-slate-400/30 bg-slate-700/30 px-2.5 py-1 text-[11px] font-semibold text-slate-300">
+                                  <Lock size={12} />
+                                  Locked
+                                </span>
+                              ) : null}
                             </div>
-                            <h3 className="mt-3 text-2xl font-bold text-white md:text-3xl">{selectedAssessment.title}</h3>
-                            <p className="mt-3 text-sm text-slate-300 md:text-base">{assessmentUnlockMessage(selectedAssessment)}</p>
-                          </div>
 
-                          <div className="mx-auto mt-7 grid w-full max-w-4xl gap-3 sm:grid-cols-3">
-                            <div className="rounded-lg border border-white/10 bg-white/5 p-4 text-center">
-                              <div className="mb-1 inline-flex text-slate-400">
-                                <Award size={16} />
-                              </div>
-                              <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Passing Score</p>
-                              <p className="mt-1 text-lg font-bold text-white">{selectedAssessment.passing_score}%</p>
-                            </div>
-                            <div className="rounded-lg border border-white/10 bg-white/5 p-4 text-center">
-                              <div className="mb-1 inline-flex text-slate-400">
-                                <Timer size={16} />
-                              </div>
-                              <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Time Limit</p>
-                              <p className="mt-1 text-lg font-bold text-white">{selectedAssessment.time_limit_minutes} min</p>
-                            </div>
-                            <div className="rounded-lg border border-white/10 bg-white/5 p-4 text-center">
-                              <div className="mb-1 inline-flex text-slate-400">
-                                <ClipboardList size={16} />
-                              </div>
-                              <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Attempts</p>
-                              <p className="mt-1 text-lg font-bold text-white">{selectedAssessment.attempt_limit}</p>
-                            </div>
-                          </div>
-
-                          <div className="mx-auto mt-6 max-w-2xl text-center">
-                            <p className="text-sm text-slate-300">
-                              Attempts used: {selectedAssessmentAttemptCount} / {selectedAssessment.attempt_limit} | Remaining:{' '}
-                              {selectedAssessmentAttemptsRemaining}
+                            <h3 className="mt-5 text-3xl font-bold text-white md:text-4xl">Ready for quiz</h3>
+                            <p className="mt-3 max-w-2xl text-sm text-slate-300">{meta.description}</p>
+                            <p className="mt-2 font-mono text-xs uppercase tracking-[0.12em] text-cyan-300/90">
+                              {assessmentUnlockMessage(selectedAssessment)}
                             </p>
-                            {latestResultByQuizId.get(selectedAssessment.id) ? (
-                              <p className="mt-1 text-sm text-slate-300">
-                                Latest result: {Number(latestResultByQuizId.get(selectedAssessment.id)?.score)}% (
-                                {latestResultByQuizId.get(selectedAssessment.id)?.passed ? 'Passed' : 'Failed'})
-                              </p>
-                            ) : (
-                              <p className="mt-1 text-sm text-slate-400">No attempts yet.</p>
-                            )}
-                          </div>
-                        </div>
 
-                        <div className="mt-6 flex justify-center">
-                          <button
-                            type="button"
-                            disabled={
-                              !isAssessmentUnlocked(selectedAssessment) ||
-                              selectedAssessmentAttemptsRemaining <= 0 ||
-                              isQuizSubmitting ||
-                              isQuizLoading
-                            }
-                            onClick={() => void handleStartQuiz(selectedAssessment)}
-                            className={`inline-flex items-center gap-2 rounded-md px-6 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60 ${meta.buttonClass}`}
-                          >
-                            <AssessmentIcon size={16} />
-                            {selectedAssessmentAttemptsRemaining <= 0 ? 'No Attempts Remaining' : meta.cta}
-                          </button>
+                            <div className="mt-6 grid gap-3 sm:grid-cols-3">
+                              <div className="rounded-lg border border-white/10 bg-white/5 p-4">
+                                <p className="font-mono text-[11px] uppercase tracking-wider text-slate-400">Passing</p>
+                                <p className="mt-1 text-2xl font-bold text-white">{selectedAssessment.passing_score}%</p>
+                              </div>
+                              <div className="rounded-lg border border-white/10 bg-white/5 p-4">
+                                <p className="font-mono text-[11px] uppercase tracking-wider text-slate-400">Timer</p>
+                                <p className="mt-1 text-2xl font-bold text-white">{selectedAssessment.time_limit_minutes}m</p>
+                              </div>
+                              <div className="rounded-lg border border-white/10 bg-white/5 p-4">
+                                <p className="font-mono text-[11px] uppercase tracking-wider text-slate-400">Attempts</p>
+                                <p className="mt-1 text-2xl font-bold text-white">{selectedAssessment.attempt_limit}</p>
+                              </div>
+                            </div>
+
+                            <div className="mt-6 flex flex-wrap items-center gap-3">
+                              <button
+                                type="button"
+                                disabled={
+                                  !unlocked ||
+                                  selectedAssessmentAttemptsRemaining <= 0 ||
+                                  isQuizSubmitting ||
+                                  isQuizLoading
+                                }
+                                onClick={() => void handleStartQuiz(selectedAssessment)}
+                                className="inline-flex items-center gap-2 rounded-lg border border-cyan-300/60 bg-cyan-500 px-6 py-3 text-sm font-semibold text-slate-950 shadow-[0_0_0_1px_rgba(34,211,238,0.35),0_10px_24px_rgba(6,182,212,0.35)] transition hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                <CirclePlay size={16} />
+                                {selectedAssessmentAttemptCount > 0 ? 'Take Quiz Again' : 'Start Quiz'}
+                              </button>
+                              <p className="text-sm text-slate-300">
+                                Remaining attempts: {selectedAssessmentAttemptsRemaining}
+                              </p>
+                            </div>
+                          </div>
+
+                          <aside className="flex min-h-0 flex-col border-t border-slate-700 bg-black/40 p-5 font-mono text-xs text-brand-100 lg:border-l lg:border-t-0">
+                            <div className="mb-4 flex items-center gap-2 border-b border-white/10 pb-3 text-brand-300">
+                              <Cpu size={14} />
+                              <span className="uppercase tracking-wider">Prep Terminal</span>
+                            </div>
+                            <div className="space-y-2">
+                              <p className="leading-relaxed text-brand-100/90">{`> [quiz] ${selectedAssessment.title}`}</p>
+                              <p className="leading-relaxed text-brand-100/90">{`> [stage] ${meta.label}`}</p>
+                              <p className="leading-relaxed text-brand-100/90">{`> [constraint] pass >= ${selectedAssessment.passing_score}%`}</p>
+                              <p className="leading-relaxed text-brand-100/90">{`> [window] ${selectedAssessment.time_limit_minutes} minutes`}</p>
+                              <p className="leading-relaxed text-brand-100/90">{`> [attempts] remaining ${selectedAssessmentAttemptsRemaining}`}</p>
+                              {latest ? (
+                                <p className="leading-relaxed text-brand-100/90">{`> [latest] ${Number(latest.score)}% (${latest.passed ? 'PASSED' : 'FAILED'})`}</p>
+                              ) : (
+                                <p className="leading-relaxed text-brand-100/90">{'> [latest] no attempts yet'}</p>
+                              )}
+                              <p className="leading-relaxed text-brand-100/90">{'> [ready] launch sequence available'}</p>
+                            </div>
+                          </aside>
                         </div>
                       </article>
                     );
@@ -1150,109 +1355,144 @@ export function ModuleViewerPage() {
                 )}
               </div>
             ) : !selectedLesson ? (
-              <div className="rounded-xl border border-white/10 bg-slate-900/70 p-5 text-sm text-slate-300 shadow-sm">
-                Select a lesson and topic from the sidebar.
-              </div>
+              <article className="rounded-xl border border-white/10 bg-slate-900/70 p-5 text-sm text-slate-300 shadow-sm">
+                Select a lesson, topic, or assessment from the sequence rail.
+              </article>
             ) : selectedTopic ? (
-              <>
-                <article className="rounded-xl border border-white/10 bg-slate-900/70 p-5 shadow-sm">
-                  <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-                    Topic {selectedTopic.sort_order}
-                  </p>
-                  <h3 className="text-xl font-bold text-white">{selectedTopic.title}</h3>
-                  {selectedTopic.summary ? <p className="mt-2 text-sm text-slate-300">{selectedTopic.summary}</p> : null}
-                  <p className="mt-2 text-xs text-slate-400">
-                    Lesson {selectedLesson.sequence_no}: {selectedLesson.title}
-                  </p>
-                </article>
-
-                <div className="space-y-3">
-                  {selectedTopicContent.length > 0 ? (
-                    selectedTopicContent.map((block) => (
-                      <div key={block.id}>
-                        <ContentBlock block={block} />
-                      </div>
-                    ))
-                  ) : (
-                    <div className="rounded-xl border border-white/10 bg-slate-900/70 p-5 text-sm text-slate-300 shadow-sm">
-                      No content blocks yet for this topic.
+              <article
+                className={`min-h-[560px] border border-white/10 bg-slate-900/70 shadow-sm ${
+                  isLessonOrTopicView ? '-mt-px rounded-b-xl rounded-t-none' : 'rounded-xl'
+                }`}
+              >
+                  <div className="grid gap-8 p-5 xl:grid-cols-[minmax(0,1fr)_340px] xl:items-center">
+                    <div className="flex justify-center">
+                      {selectedTopicDisplayHtml ? (
+                        <div
+                          className="max-w-2xl space-y-3 text-sm leading-relaxed text-slate-200 [&_h1]:text-2xl [&_h1]:font-bold [&_h1]:text-white [&_h2]:text-xl [&_h2]:font-semibold [&_h2]:text-white [&_h3]:text-lg [&_h3]:font-semibold [&_h3]:text-white [&_li]:ml-5 [&_li]:list-disc [&_ol>li]:list-decimal [&_p]:text-slate-200"
+                          dangerouslySetInnerHTML={{ __html: selectedTopicDisplayHtml }}
+                        />
+                      ) : (
+                        <p className="text-sm text-slate-400">No topic content yet.</p>
+                      )}
                     </div>
-                  )}
-                </div>
-              </>
-            ) : (
-              <>
-                <article className="rounded-xl border border-white/10 bg-slate-900/70 p-5 shadow-sm">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div>
-                      <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Lesson {selectedLesson.sequence_no}</p>
-                      <h3 className="text-xl font-bold text-white">{selectedLesson.title}</h3>
-                      <p className="mt-2 text-sm text-slate-300">{selectedLesson.summary || 'No summary provided.'}</p>
-                      <p className="mt-2 text-xs text-slate-400">
-                        Estimated time: {formatMinutesLabel(selectedLesson.estimated_minutes)}
-                      </p>
-                      {(selectedLesson.overview_image_url ?? '').trim() ? (
-                        <img src={selectedLesson.overview_image_url} alt={selectedLesson.title} className="mt-3 h-44 w-full max-w-3xl rounded-md border border-white/10 object-cover" />
-                      ) : null}
-                      {(selectedLesson.overview_text ?? '').trim() ? (
-                        <p className="mt-3 whitespace-pre-wrap text-sm text-slate-200">{selectedLesson.overview_text}</p>
-                      ) : null}
+                    <div className="flex items-center justify-center">
+                      {selectedTopicDisplayMediaUrl ? (
+                        isVideoMediaUrl(selectedTopicDisplayMediaUrl) ? (
+                          <video
+                            src={selectedTopicDisplayMediaUrl}
+                            controls
+                            className="max-h-[320px] w-full rounded-md bg-black/30 object-contain"
+                          />
+                        ) : (
+                          <img
+                            src={selectedTopicDisplayMediaUrl}
+                            alt={selectedTopic.title}
+                            className="max-h-[320px] w-full rounded-md bg-black/30 object-contain"
+                          />
+                        )
+                      ) : (
+                        <p className="text-sm text-slate-400">No media uploaded.</p>
+                      )}
                     </div>
-                    <button
-                      disabled={!unlockedLessonIds.has(selectedLesson.id) || selectedLesson.completed || isMutating}
-                      onClick={() => void handleCompleteLesson(selectedLesson.id)}
-                      className="rounded-md bg-slate-900 px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      {selectedLesson.completed ? 'Lesson Completed' : 'Mark Lesson Complete'}
-                    </button>
                   </div>
-                </article>
-
-                <div className="space-y-3">
-                  {selectedLessonContent.length > 0 ? (
-                    selectedLessonContent.map((block) => (
-                      <div key={block.id}>
-                        <ContentBlock block={block} />
+              </article>
+            ) : (
+              <section>
+                  <article
+                    className={`border border-white/10 bg-slate-900/70 shadow-sm ${
+                      isLessonOrTopicView ? '-mt-px rounded-b-xl rounded-t-none' : 'rounded-xl'
+                    }`}
+                  >
+                    <div className="space-y-6 p-5">
+                      <div>
+                        {selectedLessonDisplayHtml ? (
+                          <div
+                            className="max-w-none space-y-3 text-sm leading-relaxed text-slate-200 [&_h1]:text-2xl [&_h1]:font-bold [&_h1]:text-white [&_h2]:text-xl [&_h2]:font-semibold [&_h2]:text-white [&_h3]:text-lg [&_h3]:font-semibold [&_h3]:text-white [&_li]:ml-5 [&_li]:list-disc [&_ol>li]:list-decimal [&_p]:text-slate-200"
+                            dangerouslySetInnerHTML={{ __html: selectedLessonDisplayHtml }}
+                          />
+                        ) : (
+                          <p className="text-sm text-slate-400">No lesson content yet.</p>
+                        )}
                       </div>
-                    ))
-                  ) : (
-                    <div className="rounded-xl border border-white/10 bg-slate-900/70 p-5 text-sm text-slate-300 shadow-sm">
-                      No lesson-level content blocks yet for this lesson.
+
+                      <div>
+                        {selectedLessonDisplayMediaUrl ? (
+                          isVideoMediaUrl(selectedLessonDisplayMediaUrl) ? (
+                            <video
+                              src={selectedLessonDisplayMediaUrl}
+                              controls
+                              className="max-h-[360px] w-full rounded-md border border-white/10 bg-black/30 object-contain"
+                            />
+                          ) : (
+                            <img
+                              src={selectedLessonDisplayMediaUrl}
+                              alt={selectedLesson.title}
+                              className="max-h-[360px] w-full rounded-md border border-white/10 bg-black/30 object-contain"
+                            />
+                          )
+                        ) : (
+                          <p className="text-sm text-slate-400">No media uploaded.</p>
+                        )}
+                      </div>
+
+                      <div>
+                        <button
+                          disabled={!unlockedLessonIds.has(selectedLesson.id) || selectedLesson.completed || isMutating}
+                          onClick={() => void handleCompleteLesson(selectedLesson.id)}
+                          className="rounded-md bg-slate-900 px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {selectedLesson.completed ? 'Lesson Completed' : 'Mark Lesson Complete'}
+                        </button>
+                      </div>
                     </div>
-                  )}
-                </div>
-              </>
+                  </article>
+                </section>
             )}
             </div>
+
             {currentSequenceIndex >= 0 ? (
-              <article className="mt-auto rounded-xl border border-white/10 bg-slate-900/70 p-5 shadow-sm">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <button
-                    disabled={!previousSequenceItem || isQuizOngoing}
-                    onClick={() => goToSequenceItem(previousSequenceItem)}
-                    className="inline-flex items-center gap-2 rounded-md border border-white/20 px-3 py-2 text-sm font-semibold text-slate-200 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    <ChevronLeft size={16} />
-                    Previous
-                  </button>
-                  <span className="text-xs text-slate-400">
-                    Sequence {currentSequenceIndex + 1} of {sequenceItems.length}
-                  </span>
-                  <button
-                    disabled={!nextSequenceItem || isQuizOngoing}
-                    onClick={() => goToSequenceItem(nextSequenceItem)}
-                    className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    Next
-                    <ChevronRight size={16} />
-                  </button>
-                </div>
-                {isQuizOngoing ? (
-                  <p className="mt-2 text-center text-xs text-slate-400">
-                    Sequence navigation is disabled while an assessment attempt is in progress.
-                  </p>
-                ) : null}
-              </article>
+              <div className="mt-auto pt-4">
+                <article className="rounded-xl border border-white/10 bg-slate-900/70 p-4 shadow-sm">
+                  <div className="grid items-center gap-3 md:grid-cols-[1fr_auto_1fr]">
+                    <div className="flex">
+                      <button
+                        disabled={!previousSequenceItem || !previousSequenceItem.unlocked || isQuizOngoing}
+                        onClick={() => goToSequenceItem(previousSequenceItem)}
+                        className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-white/20 bg-slate-900/80 px-4 py-2.5 text-sm font-semibold text-slate-100 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50 md:w-auto md:min-w-[136px]"
+                      >
+                        <ChevronLeft size={16} />
+                        Previous
+                      </button>
+                    </div>
+
+                    <div className="px-2 text-center">
+                      <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Current Page</p>
+                      <p className="text-sm font-medium text-slate-200">{currentPositionLabel}</p>
+                    </div>
+
+                    <div className="flex md:justify-end">
+                      <button
+                        disabled={!nextSequenceItem || !nextSequenceItem.unlocked || isQuizOngoing}
+                        onClick={() => goToSequenceItem(nextSequenceItem)}
+                        className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-white/20 bg-slate-900/80 px-4 py-2.5 text-sm font-semibold text-slate-100 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50 md:w-auto md:min-w-[136px]"
+                      >
+                        Next
+                        <ChevronRight size={16} />
+                      </button>
+                    </div>
+                  </div>
+
+                  {!isQuizOngoing && nextSequenceItem && !nextSequenceItem.unlocked ? (
+                    <p className="mt-2 text-center text-xs text-slate-400">Next item is locked.</p>
+                  ) : null}
+
+                  {isQuizOngoing ? (
+                    <p className="mt-2 text-center text-xs text-slate-400">
+                      Sequence navigation is disabled while an assessment attempt is in progress.
+                    </p>
+                  ) : null}
+                </article>
+              </div>
             ) : null}
           </div>
         </div>
@@ -1289,5 +1529,4 @@ export function ModuleViewerPage() {
     </section>
   );
 }
-
 

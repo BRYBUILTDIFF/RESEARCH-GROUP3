@@ -10,8 +10,9 @@ export function AdminAnalyticsPage() {
   return (
     <section className="space-y-6">
       <div>
-        <h2 className="text-2xl font-bold text-slate-900">Performance Analytics</h2>
-        <p className="text-slate-600">Module-level insights and completion metrics.</p>
+        <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-brand-300">Insights</p>
+        <h2 className="text-2xl font-bold text-white">Performance Analytics</h2>
+        <p className="text-slate-400">Module-level insights and completion metrics.</p>
       </div>
 
       <div className="grid gap-4 md:grid-cols-3">
@@ -20,17 +21,17 @@ export function AdminAnalyticsPage() {
         <StatCard label="Assessments Taken" value={128} />
       </div>
 
-      <div className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-        <h3 className="mb-4 text-lg font-bold text-slate-900">Score by Module</h3>
+      <div className="dark-glass-card border-white/10 p-6">
+        <h3 className="mb-4 text-lg font-bold text-white">Score by Module</h3>
         <div className="space-y-4">
           {moduleScores.map((row) => (
             <div key={row.module}>
               <div className="mb-1 flex items-center justify-between text-sm">
-                <span className="font-medium text-slate-700">{row.module}</span>
-                <span className="font-semibold text-slate-900">{row.score}%</span>
+                <span className="font-medium text-slate-300">{row.module}</span>
+                <span className="font-semibold text-slate-100">{row.score}%</span>
               </div>
-              <div className="h-3 w-full rounded-full bg-slate-100">
-                <div className="h-3 rounded-full bg-sky-600" style={{ width: `${row.score}%` }} />
+              <div className="h-3 w-full rounded-full bg-slate-800">
+                <div className="h-3 rounded-full bg-brand-500" style={{ width: `${row.score}%` }} />
               </div>
             </div>
           ))}

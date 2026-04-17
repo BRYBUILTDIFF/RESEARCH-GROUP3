@@ -26,6 +26,8 @@ router.put('/questions/:questionId', requireRole('admin'), updateQuizQuestion);
 router.delete('/questions/:questionId', requireRole('admin'), deleteQuizQuestion);
 router.get('/questions/:questionId/answers', requireRole('admin'), listQuestionAnswers);
 router.post('/questions/:questionId/answers', requireRole('admin'), createQuestionAnswer);
+router.put('/questions/:questionId/answers/:answerId', requireRole('admin'), updateQuestionAnswer);
+router.delete('/questions/:questionId/answers/:answerId', requireRole('admin'), deleteQuestionAnswer);
 router.put('/answers/:answerId', requireRole('admin'), updateQuestionAnswer);
 router.delete('/answers/:answerId', requireRole('admin'), deleteQuestionAnswer);
 router.put('/:id', requireRole('admin'), updateQuiz);

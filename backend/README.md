@@ -11,6 +11,7 @@ Node.js + Express + PostgreSQL API for a simulation-based LMS with strict sequen
 ## Setup
 1. Copy `.env.example` to `.env`
 2. Configure `DATABASE_URL`, `JWT_SECRET`, `CORS_ORIGIN`
+   - Optional: set `API_BODY_LIMIT` (for large JSON payloads, e.g. base64 media), default `50mb`
 3. Install dependencies
    - `npm install`
 4. Run migrations

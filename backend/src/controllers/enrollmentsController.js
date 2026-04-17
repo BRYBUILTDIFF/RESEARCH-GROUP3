@@ -1,4 +1,5 @@
 import { pool } from '../db/pool.js';
+import { assertModulePublishReady } from '../services/modulePublishValidationService.js';
 import { AppError } from '../utils/AppError.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 
@@ -67,6 +68,7 @@ export const createEnrollment = asyncHandler(async (req, res) => {
   }
 
   await ensurePrerequisiteCompleted(targetUserId, module);
+  await assertModulePublishReady(module.id, { statusCode: 400, includeReasons: false });
 
   const inserted = await pool.query(
     `

@@ -3,7 +3,6 @@ export interface ModuleSummary {
   title: string;
   description: string;
   thumbnail_url?: string | null;
-  difficulty: 'Beginner' | 'Intermediate' | 'Advanced';
   category: string | null;
   prerequisite_module_id: number | null;
   is_locked: boolean;
@@ -75,6 +74,7 @@ export interface QuizSummary {
   lesson_id: number | null;
   title: string;
   quiz_type: 'lesson_quiz' | 'final_exam';
+  stage: 'pre_test' | 'post_test' | 'final_exam';
   passing_score: number;
   time_limit_minutes: number;
   attempt_limit: number;

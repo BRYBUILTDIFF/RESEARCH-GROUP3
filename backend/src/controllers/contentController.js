@@ -119,8 +119,13 @@ export const createContent = asyncHandler(async (req, res) => {
 
 export const updateContent = asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const { topicId, title, bodyText, contentUrl, simulationKey, metadata, sortOrder, isRequired } = req.body;
+  const { topicId, contentType, title, bodyText, contentUrl, simulationKey, metadata, sortOrder, isRequired } = req.body;
   const hasTopicId = Object.prototype.hasOwnProperty.call(req.body, 'topicId');
+  const hasContentType = Object.prototype.hasOwnProperty.call(req.body, 'contentType');
+
+  if (hasContentType) {
+    validateContentType(contentType);
+  }
 
   let topicForUpdate = null;
   if (hasTopicId) {
@@ -145,13 +150,14 @@ export const updateContent = asyncHandler(async (req, res) => {
       SET
         topic_id = CASE WHEN $2::boolean THEN $3 ELSE topic_id END,
         lesson_id = CASE WHEN $2::boolean THEN $4 ELSE lesson_id END,
-        title = COALESCE($5, title),
-        body_text = COALESCE($6, body_text),
-        content_url = COALESCE($7, content_url),
-        simulation_key = COALESCE($8, simulation_key),
-        metadata = COALESCE($9::jsonb, metadata),
-        sort_order = COALESCE($10, sort_order),
-        is_required = COALESCE($11, is_required),
+        content_type = CASE WHEN $5::boolean THEN $6 ELSE content_type END,
+        title = COALESCE($7, title),
+        body_text = COALESCE($8, body_text),
+        content_url = COALESCE($9, content_url),
+        simulation_key = COALESCE($10, simulation_key),
+        metadata = COALESCE($11::jsonb, metadata),
+        sort_order = COALESCE($12, sort_order),
+        is_required = COALESCE($13, is_required),
         updated_at = NOW()
       WHERE id = $1
       RETURNING
@@ -163,6 +169,8 @@ export const updateContent = asyncHandler(async (req, res) => {
       hasTopicId,
       topicForUpdate?.id ?? null,
       topicForUpdate?.lesson_id ?? null,
+      hasContentType,
+      contentType ?? null,
       title ?? null,
       bodyText ?? null,
       contentUrl ?? null,
@@ -176,6 +184,49 @@ export const updateContent = asyncHandler(async (req, res) => {
     throw new AppError('Content item not found.', 404);
   }
   res.json({ content: updated.rows[0] });
+});
+
+export const reorderContent = asyncHandler(async (req, res) => {
+  const { topicId, orderedContentIds } = req.body;
+  if (!topicId || !Array.isArray(orderedContentIds) || orderedContentIds.length === 0) {
+    throw new AppError('topicId and orderedContentIds[] are required.', 400);
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    for (let index = 0; index < orderedContentIds.length; index += 1) {
+      const contentId = Number(orderedContentIds[index]);
+      await client.query(
+        `
+          UPDATE lesson_content
+          SET sort_order = $1, updated_at = NOW()
+          WHERE id = $2
+            AND topic_id = $3;
+        `,
+        [index + 1, contentId, topicId]
+      );
+    }
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+
+  const result = await pool.query(
+    `
+      SELECT
+        id, lesson_id, topic_id, content_type, title, body_text, content_url, simulation_key,
+        metadata, sort_order, is_required, created_at, updated_at
+      FROM lesson_content
+      WHERE topic_id = $1
+      ORDER BY sort_order ASC, id ASC;
+    `,
+    [topicId]
+  );
+  res.json({ content: result.rows });
 });
 
 export const deleteContent = asyncHandler(async (req, res) => {

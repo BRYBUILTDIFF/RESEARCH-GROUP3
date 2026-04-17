@@ -104,7 +104,17 @@ export async function getModuleCompletionPercent(enrollmentId, moduleId) {
 export async function ensureQuizUnlocked({ enrollmentId, quizId }) {
   const quizResult = await pool.query(
     `
-      SELECT id, module_id, lesson_id, quiz_type, passing_score, attempt_limit, time_limit_minutes
+      SELECT
+        id,
+        module_id,
+        lesson_id,
+        title,
+        quiz_type,
+        stage,
+        passing_score,
+        attempt_limit,
+        time_limit_minutes,
+        is_active
       FROM quizzes
       WHERE id = $1
         AND is_active = TRUE

@@ -23,7 +23,9 @@ export function UserModulesPage() {
       setError('');
       try {
         const [data, enrollments] = await Promise.all([getModules(), getEnrollments()]);
-        setModules(data.filter((module) => module.is_active));
+        // User module discovery should only show published modules.
+        const publishedModules = data.filter((module) => module.is_active);
+        setModules(publishedModules);
 
         const enrollmentMap: Record<number, Enrollment> = {};
         enrollments.forEach((enrollment) => {
@@ -212,7 +214,7 @@ export function UserModulesPage() {
             <div className="flex flex-wrap items-end justify-between gap-3 border-b border-white/10 pb-2">
               <div>
                 <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">Discover</p>
-                <h3 className="text-lg font-bold text-white">Available Modules</h3>
+                <h3 className="text-lg font-bold text-white">Published Modules</h3>
               </div>
               <span className="rounded-full bg-white/10 px-3 py-1 text-xs font-semibold text-slate-200">
                 {notEnrolledModules.length} total
@@ -221,7 +223,7 @@ export function UserModulesPage() {
 
             {notEnrolledModules.length === 0 ? (
               <p className="rounded-xl border border-white/10 bg-slate-900/70 p-4 text-sm text-slate-300 shadow-sm">
-                No available modules found.
+                No published modules found.
               </p>
             ) : (
               <div className="relative">
@@ -251,7 +253,7 @@ export function UserModulesPage() {
                               {module.category ?? 'General'}
                             </span>
                             <span className="rounded-full bg-white/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-slate-300">
-                              Available
+                              Published
                             </span>
                           </div>
                           <div className="mb-3 aspect-video w-full overflow-hidden rounded-md border border-white/10 bg-white/10">

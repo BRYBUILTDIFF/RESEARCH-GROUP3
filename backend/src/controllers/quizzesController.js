@@ -9,6 +9,42 @@ function validateQuizType(type) {
   }
 }
 
+function inferStage(quizType, lessonId) {
+  if (quizType === 'final_exam') return 'final_exam';
+  return lessonId === null ? 'pre_test' : 'post_test';
+}
+
+function validateQuizStage(stage) {
+  if (!['pre_test', 'post_test', 'final_exam'].includes(stage)) {
+    throw new AppError('Invalid stage. Use pre_test, post_test, or final_exam.', 400);
+  }
+}
+
+function validateStageAssignment({ quizType, lessonId, stage }) {
+  validateQuizType(quizType);
+  validateQuizStage(stage);
+
+  if (quizType === 'final_exam') {
+    if (stage !== 'final_exam') {
+      throw new AppError('Final exam quizzes must use stage=final_exam.', 400);
+    }
+    if (lessonId !== null) {
+      throw new AppError('Final exam quizzes must not have lessonId.', 400);
+    }
+    return;
+  }
+
+  if (stage === 'final_exam') {
+    throw new AppError('Lesson quizzes cannot use stage=final_exam.', 400);
+  }
+  if (stage === 'pre_test' && lessonId !== null) {
+    throw new AppError('Pre-test quizzes must not have lessonId.', 400);
+  }
+  if (stage === 'post_test' && lessonId === null) {
+    throw new AppError('Post-test quizzes must include lessonId.', 400);
+  }
+}
+
 export const listQuizzes = asyncHandler(async (req, res) => {
   const { moduleId, lessonId } = req.query;
   const whereClauses = [];
@@ -26,7 +62,7 @@ export const listQuizzes = asyncHandler(async (req, res) => {
   const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
   const quizzes = await pool.query(
     `
-      SELECT id, module_id, lesson_id, title, quiz_type, passing_score, time_limit_minutes, attempt_limit, is_active
+      SELECT id, module_id, lesson_id, title, quiz_type, stage, passing_score, time_limit_minutes, attempt_limit, is_active
       FROM quizzes
       ${whereSql}
       ORDER BY created_at DESC;
@@ -42,6 +78,7 @@ export const createQuiz = asyncHandler(async (req, res) => {
     lessonId = null,
     title,
     quizType,
+    stage,
     passingScore = 70,
     timeLimitMinutes = 15,
     attemptLimit = 3,
@@ -49,42 +86,77 @@ export const createQuiz = asyncHandler(async (req, res) => {
   if (!moduleId || !title || !quizType) {
     throw new AppError('moduleId, title, and quizType are required.', 400);
   }
-  validateQuizType(quizType);
+  const resolvedStage = stage ?? inferStage(quizType, lessonId);
+  validateStageAssignment({ quizType, lessonId, stage: resolvedStage });
 
   const inserted = await pool.query(
     `
-      INSERT INTO quizzes (module_id, lesson_id, title, quiz_type, passing_score, time_limit_minutes, attempt_limit)
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
-      RETURNING id, module_id, lesson_id, title, quiz_type, passing_score, time_limit_minutes, attempt_limit, is_active;
+      INSERT INTO quizzes (module_id, lesson_id, title, quiz_type, stage, passing_score, time_limit_minutes, attempt_limit)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      RETURNING id, module_id, lesson_id, title, quiz_type, stage, passing_score, time_limit_minutes, attempt_limit, is_active;
     `,
-    [moduleId, lessonId, title, quizType, passingScore, timeLimitMinutes, attemptLimit]
+    [moduleId, lessonId, title, quizType, resolvedStage, passingScore, timeLimitMinutes, attemptLimit]
   );
   res.status(201).json({ quiz: inserted.rows[0] });
 });
 
 export const updateQuiz = asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const { lessonId, title, passingScore, timeLimitMinutes, attemptLimit, isActive } = req.body;
+  const { lessonId, title, quizType, stage, passingScore, timeLimitMinutes, attemptLimit, isActive } = req.body;
   const hasLessonId = Object.prototype.hasOwnProperty.call(req.body, 'lessonId');
+
+  const existingResult = await pool.query(
+    `
+      SELECT id, lesson_id, quiz_type, stage
+      FROM quizzes
+      WHERE id = $1
+      LIMIT 1;
+    `,
+    [id]
+  );
+  if (existingResult.rowCount === 0) {
+    throw new AppError('Quiz not found.', 404);
+  }
+
+  const existing = existingResult.rows[0];
+  const resolvedQuizType = quizType ?? existing.quiz_type;
+  const resolvedLessonId = hasLessonId ? lessonId ?? null : existing.lesson_id;
+  const resolvedStage = stage ?? existing.stage ?? inferStage(resolvedQuizType, resolvedLessonId);
+  validateStageAssignment({
+    quizType: resolvedQuizType,
+    lessonId: resolvedLessonId,
+    stage: resolvedStage,
+  });
+
   const updated = await pool.query(
     `
       UPDATE quizzes
       SET
         lesson_id = CASE WHEN $2::boolean THEN $3 ELSE lesson_id END,
         title = COALESCE($4, title),
-        passing_score = COALESCE($5, passing_score),
-        time_limit_minutes = COALESCE($6, time_limit_minutes),
-        attempt_limit = COALESCE($7, attempt_limit),
-        is_active = COALESCE($8, is_active),
+        quiz_type = COALESCE($5, quiz_type),
+        stage = $6,
+        passing_score = COALESCE($7, passing_score),
+        time_limit_minutes = COALESCE($8, time_limit_minutes),
+        attempt_limit = COALESCE($9, attempt_limit),
+        is_active = COALESCE($10, is_active),
         updated_at = NOW()
       WHERE id = $1
-      RETURNING id, module_id, lesson_id, title, quiz_type, passing_score, time_limit_minutes, attempt_limit, is_active;
+      RETURNING id, module_id, lesson_id, title, quiz_type, stage, passing_score, time_limit_minutes, attempt_limit, is_active;
     `,
-    [id, hasLessonId, lessonId ?? null, title ?? null, passingScore ?? null, timeLimitMinutes ?? null, attemptLimit ?? null, isActive ?? null]
+    [
+      id,
+      hasLessonId,
+      resolvedLessonId,
+      title ?? null,
+      quizType ?? null,
+      resolvedStage,
+      passingScore ?? null,
+      timeLimitMinutes ?? null,
+      attemptLimit ?? null,
+      isActive ?? null,
+    ]
   );
-  if (updated.rowCount === 0) {
-    throw new AppError('Quiz not found.', 404);
-  }
   res.json({ quiz: updated.rows[0] });
 });
 
@@ -218,8 +290,26 @@ export const createQuestionAnswer = asyncHandler(async (req, res) => {
 });
 
 export const updateQuestionAnswer = asyncHandler(async (req, res) => {
+  const { questionId } = req.params;
   const { answerId } = req.params;
   const { answerText, isCorrect, explanation, sortOrder } = req.body;
+
+  if (questionId) {
+    const ownership = await pool.query(
+      `
+        SELECT id
+        FROM answers
+        WHERE id = $1
+          AND question_id = $2
+        LIMIT 1;
+      `,
+      [answerId, questionId]
+    );
+    if (ownership.rowCount === 0) {
+      throw new AppError('Answer not found for this question.', 404);
+    }
+  }
+
   const updated = await pool.query(
     `
       UPDATE answers
@@ -240,8 +330,14 @@ export const updateQuestionAnswer = asyncHandler(async (req, res) => {
 });
 
 export const deleteQuestionAnswer = asyncHandler(async (req, res) => {
+  const { questionId } = req.params;
   const { answerId } = req.params;
-  const deleted = await pool.query('DELETE FROM answers WHERE id = $1 RETURNING id;', [answerId]);
+  const deleted = questionId
+    ? await pool.query(
+        'DELETE FROM answers WHERE id = $1 AND question_id = $2 RETURNING id;',
+        [answerId, questionId]
+      )
+    : await pool.query('DELETE FROM answers WHERE id = $1 RETURNING id;', [answerId]);
   if (deleted.rowCount === 0) {
     throw new AppError('Answer not found.', 404);
   }

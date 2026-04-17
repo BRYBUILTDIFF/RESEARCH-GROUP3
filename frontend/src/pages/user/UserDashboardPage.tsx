@@ -31,8 +31,8 @@ interface AssessmentStatusItem {
 }
 
 function getQuizStage(quiz: QuizSummary): 'Pre Test' | 'Post Test' | 'Final Test' {
-  if (quiz.quiz_type === 'final_exam') return 'Final Test';
-  if (/\bpre[-\s]?test\b/i.test(quiz.title)) return 'Pre Test';
+  if (quiz.stage === 'final_exam' || quiz.quiz_type === 'final_exam') return 'Final Test';
+  if (quiz.stage === 'pre_test') return 'Pre Test';
   return 'Post Test';
 }
 
@@ -231,7 +231,7 @@ export function UserDashboardPage() {
                   </h3>
                   <p className="mt-1 text-sm text-slate-300">
                     Next: {continueSnapshot.nextLesson?.title ?? 'Final module check'}{' '}
-                    {continueSnapshot.nextLesson?.estimated_minutes ? `· ${continueSnapshot.nextLesson.estimated_minutes} min` : ''}
+                    {continueSnapshot.nextLesson?.estimated_minutes ? `- ${continueSnapshot.nextLesson.estimated_minutes} min` : ''}
                   </p>
                   <div className="mt-4 rounded-lg border border-white/10 bg-white/5 px-3 py-3">
                     <div className="mb-1.5 flex items-center justify-between text-xs font-semibold">

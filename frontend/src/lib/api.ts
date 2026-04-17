@@ -80,7 +80,6 @@ export async function createModule(payload: {
   title: string;
   description: string;
   category?: string;
-  difficulty?: 'Beginner' | 'Intermediate' | 'Advanced';
   thumbnailUrl?: string;
 }) {
   return apiRequest<{ module: ModuleSummary }>('/api/modules', {
@@ -95,7 +94,6 @@ export async function updateModule(
     title: string;
     description: string;
     category: string;
-    difficulty: 'Beginner' | 'Intermediate' | 'Advanced';
     thumbnailUrl: string;
     prerequisiteModuleId: number | null;
     isLocked: boolean;
@@ -187,6 +185,7 @@ export async function updateLessonContent(
   contentId: number,
   payload: Partial<{
     topicId: number;
+    contentType: 'text' | 'image' | 'video' | 'simulation' | 'file';
     title: string;
     bodyText: string;
     contentUrl: string;
@@ -198,6 +197,14 @@ export async function updateLessonContent(
   const data = await apiRequest<{ content: LessonContentBlock }>(`/api/content/${contentId}`, {
     method: 'PUT',
     body: JSON.stringify(payload),
+  });
+  return data.content;
+}
+
+export async function reorderLessonContent(topicId: number, orderedContentIds: number[]): Promise<LessonContentBlock[]> {
+  const data = await apiRequest<{ content: LessonContentBlock[] }>('/api/content/reorder', {
+    method: 'PATCH',
+    body: JSON.stringify({ topicId, orderedContentIds }),
   });
   return data.content;
 }
@@ -267,6 +274,7 @@ export async function createQuiz(payload: {
   lessonId?: number | null;
   title: string;
   quizType: 'lesson_quiz' | 'final_exam';
+  stage: 'pre_test' | 'post_test' | 'final_exam';
   passingScore?: number;
   timeLimitMinutes?: number;
   attemptLimit?: number;
@@ -283,6 +291,8 @@ export async function updateQuiz(
   payload: Partial<{
     lessonId: number | null;
     title: string;
+    quizType: 'lesson_quiz' | 'final_exam';
+    stage: 'pre_test' | 'post_test' | 'final_exam';
     passingScore: number;
     timeLimitMinutes: number;
     attemptLimit: number;
@@ -352,18 +362,19 @@ export async function createQuestionAnswer(
 }
 
 export async function updateQuestionAnswer(
+  questionId: number,
   answerId: number,
   payload: Partial<{ answerText: string; isCorrect: boolean; explanation: string; sortOrder: number }>
 ): Promise<AnswerOption> {
-  const data = await apiRequest<{ answer: AnswerOption }>(`/api/quizzes/answers/${answerId}`, {
+  const data = await apiRequest<{ answer: AnswerOption }>(`/api/quizzes/questions/${questionId}/answers/${answerId}`, {
     method: 'PUT',
     body: JSON.stringify(payload),
   });
   return data.answer;
 }
 
-export async function deleteQuestionAnswer(answerId: number) {
-  await apiRequest<{}>(`/api/quizzes/answers/${answerId}`, {
+export async function deleteQuestionAnswer(questionId: number, answerId: number) {
+  await apiRequest<{}>(`/api/quizzes/questions/${questionId}/answers/${answerId}`, {
     method: 'DELETE',
   });
 }
@@ -460,6 +471,29 @@ export async function getUsers(): Promise<
     }>;
   }>('/api/users');
   return data.users;
+}
+
+export async function getUserById(id: number): Promise<{
+  id: number;
+  email: string;
+  full_name: string;
+  role: 'admin' | 'user';
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}> {
+  const data = await apiRequest<{
+    user: {
+      id: number;
+      email: string;
+      full_name: string;
+      role: 'admin' | 'user';
+      is_active: boolean;
+      created_at: string;
+      updated_at: string;
+    };
+  }>(`/api/users/${id}`);
+  return data.user;
 }
 
 export async function createUser(payload: {
