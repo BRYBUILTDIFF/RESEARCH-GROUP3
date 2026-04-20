@@ -1,6 +1,6 @@
 
-import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, ChevronLeft, ChevronRight, Eye, Plus, Search, Trash2, Upload } from 'lucide-react';
+import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { ArrowLeft, ChevronLeft, ChevronRight, Eye, Plus, Search, Trash2, Upload, X } from 'lucide-react';
 import {
   createLesson,
   createLessonContent,
@@ -130,6 +130,7 @@ export function AdminModulesPage() {
   const [previewSelection, setPreviewSelection] = useState<BuilderSelection>({ view: 'preTest' });
   const lessonContentEditorRef = useRef<HTMLDivElement | null>(null);
   const topicContentEditorRef = useRef<HTMLDivElement | null>(null);
+  const editThumbnailInputRef = useRef<HTMLInputElement | null>(null);
 
   const run = async (task: () => Promise<void>) => {
     setBusy(true);
@@ -393,6 +394,27 @@ export function AdminModulesPage() {
       if (builder && builder.module.id === editModuleId) await loadBuilder(editModuleId, selection);
       setShowEditModal(false);
     });
+  };
+
+  const handleEditThumbnailUpload = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      setError('Please select an image file for the module thumbnail.');
+      event.target.value = '';
+      return;
+    }
+
+    try {
+      const imageDataUrl = await toDataUrl(file);
+      setEditForm((prev) => ({ ...prev, thumbnailUrl: imageDataUrl }));
+      setError('');
+    } catch {
+      setError('Failed to read selected image.');
+    } finally {
+      event.target.value = '';
+    }
   };
 
   const openAddNodeModal = (type: AddType) => {
@@ -753,12 +775,11 @@ export function AdminModulesPage() {
         <div className="space-y-5">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
             <div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-brand-300">Content Authoring</p>
-              <h2 className="mt-1 text-2xl font-bold text-white">Modules</h2>
+              <h2 className="text-2xl font-bold text-white">Modules</h2>
               <p className="mt-1 text-sm text-slate-300">Create modules, update module details, and open the full builder.</p>
             </div>
-            <div className="flex w-full flex-wrap items-center justify-end gap-2 lg:w-auto">
-              <div className="relative w-full max-w-md">
+            <div className="flex w-full items-center gap-2 sm:flex-nowrap sm:justify-end lg:w-auto">
+              <div className="relative w-full sm:w-[340px]">
                 <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                 <input
                   value={search}
@@ -769,7 +790,7 @@ export function AdminModulesPage() {
               </div>
               <button
                 onClick={() => setShowCreateModal(true)}
-                className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-500"
+                className="inline-flex shrink-0 items-center gap-2 rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-500"
               >
                 <Plus size={16} />
                 Create Module
@@ -1228,8 +1249,13 @@ export function AdminModulesPage() {
           <form onSubmit={handleUpdateModule} className="w-full max-w-5xl rounded-xl border border-white/10 bg-slate-900 p-5 shadow-2xl">
             <div className="mb-4 flex items-start justify-between">
               <h3 className="text-xl font-bold text-white">Edit Module Details</h3>
-              <button type="button" onClick={() => setShowEditModal(false)} className="rounded-md border border-white/20 px-3 py-2 text-sm font-semibold text-slate-200">
-                Close
+              <button
+                type="button"
+                onClick={() => setShowEditModal(false)}
+                aria-label="Close edit module details"
+                className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/20 text-slate-200 transition hover:bg-white/10"
+              >
+                <X size={16} />
               </button>
             </div>
 
@@ -1273,60 +1299,140 @@ export function AdminModulesPage() {
                 </div>
               </article>
 
-              <div className="grid gap-3 md:grid-cols-2">
-                <input
-                  required
-                  value={editForm.title}
-                  onChange={(event) => setEditForm((prev) => ({ ...prev, title: event.target.value }))}
-                  placeholder="Module title"
-                  className="rounded-md border border-white/20 bg-slate-950/70 px-3 py-2 text-sm text-slate-100 md:col-span-2"
-                />
-                <select
-                  value={editForm.category}
-                  onChange={(event) => setEditForm((prev) => ({ ...prev, category: event.target.value }))}
-                  className="rounded-md border border-white/20 bg-slate-950/70 px-3 py-2 text-sm text-slate-100"
-                >
-                  {MODULE_CATEGORIES.map((category) => (
-                    <option key={category} value={category}>
-                      {category}
-                    </option>
-                  ))}
-                </select>
-                <select
-                  value={editForm.prerequisiteModuleId ?? ''}
-                  onChange={(event) => setEditForm((prev) => ({ ...prev, prerequisiteModuleId: event.target.value ? Number(event.target.value) : null }))}
-                  className="rounded-md border border-white/20 bg-slate-950/70 px-3 py-2 text-sm text-slate-100"
-                >
-                  <option value="">No prerequisite</option>
-                  {modules
-                    .filter((module) => module.id !== editModuleId)
-                    .map((module) => (
-                      <option key={module.id} value={module.id}>
-                        {module.title}
+              <div className="grid gap-4 rounded-xl border border-white/10 bg-slate-950/30 p-4 md:grid-cols-2">
+                <label htmlFor="edit-module-title" className="space-y-1.5 md:col-span-2">
+                  <span className="block text-xs font-semibold uppercase tracking-[0.12em] text-slate-300">Module Title</span>
+                  <input
+                    id="edit-module-title"
+                    required
+                    value={editForm.title}
+                    onChange={(event) => setEditForm((prev) => ({ ...prev, title: event.target.value }))}
+                    placeholder="Enter module title"
+                    className="w-full rounded-lg border border-white/20 bg-slate-950/80 px-3.5 py-2.5 text-sm text-slate-100 placeholder:text-slate-500 transition focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-500/25"
+                  />
+                </label>
+
+                <label htmlFor="edit-module-category" className="space-y-1.5">
+                  <span className="block text-xs font-semibold uppercase tracking-[0.12em] text-slate-300">Category</span>
+                  <select
+                    id="edit-module-category"
+                    value={editForm.category}
+                    onChange={(event) => setEditForm((prev) => ({ ...prev, category: event.target.value }))}
+                    className="w-full rounded-lg border border-white/20 bg-slate-950/80 px-3.5 py-2.5 text-sm text-slate-100 transition focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-500/25"
+                  >
+                    {MODULE_CATEGORIES.map((category) => (
+                      <option key={category} value={category}>
+                        {category}
                       </option>
                     ))}
-                </select>
-                <input
-                  value={editForm.thumbnailUrl}
-                  onChange={(event) => setEditForm((prev) => ({ ...prev, thumbnailUrl: event.target.value }))}
-                  placeholder="Thumbnail URL"
-                  className="rounded-md border border-white/20 bg-slate-950/70 px-3 py-2 text-sm text-slate-100 md:col-span-2"
-                />
-                <textarea
-                  required
-                  value={editForm.description}
-                  onChange={(event) => setEditForm((prev) => ({ ...prev, description: event.target.value }))}
-                  placeholder="Module description"
-                  className="h-28 rounded-md border border-white/20 bg-slate-950/70 px-3 py-2 text-sm text-slate-100 md:col-span-2"
-                />
-                <label className="inline-flex items-center gap-2 rounded-md border border-white/15 bg-slate-950/60 px-3 py-2 text-sm text-slate-200">
-                  <input type="checkbox" checked={editForm.isActive} onChange={(event) => setEditForm((prev) => ({ ...prev, isActive: event.target.checked }))} />
-                  Published
+                  </select>
                 </label>
-                <label className="inline-flex items-center gap-2 rounded-md border border-white/15 bg-slate-950/60 px-3 py-2 text-sm text-slate-200">
-                  <input type="checkbox" checked={editForm.isLocked} onChange={(event) => setEditForm((prev) => ({ ...prev, isLocked: event.target.checked }))} />
-                  Locked
+
+                <label htmlFor="edit-module-prerequisite" className="space-y-1.5">
+                  <span className="block text-xs font-semibold uppercase tracking-[0.12em] text-slate-300">Prerequisite Module</span>
+                  <select
+                    id="edit-module-prerequisite"
+                    value={editForm.prerequisiteModuleId ?? ''}
+                    onChange={(event) => setEditForm((prev) => ({ ...prev, prerequisiteModuleId: event.target.value ? Number(event.target.value) : null }))}
+                    className="w-full rounded-lg border border-white/20 bg-slate-950/80 px-3.5 py-2.5 text-sm text-slate-100 transition focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-500/25"
+                  >
+                    <option value="">No prerequisite</option>
+                    {modules
+                      .filter((module) => module.id !== editModuleId)
+                      .map((module) => (
+                        <option key={module.id} value={module.id}>
+                          {module.title}
+                        </option>
+                      ))}
+                  </select>
                 </label>
+
+                <div className="space-y-2 md:col-span-2">
+                  <span className="block text-xs font-semibold uppercase tracking-[0.12em] text-slate-300">Thumbnail</span>
+                  <div className="flex flex-col gap-2 rounded-lg border border-white/20 bg-slate-950/65 p-3 sm:flex-row sm:items-center sm:justify-between">
+                    <p className="text-xs text-slate-300">Upload a thumbnail image for this module card preview.</p>
+                    <div className="flex items-center gap-2">
+                      <input ref={editThumbnailInputRef} type="file" accept="image/*" onChange={handleEditThumbnailUpload} className="hidden" />
+                      <button
+                        type="button"
+                        onClick={() => editThumbnailInputRef.current?.click()}
+                        className="inline-flex items-center gap-1.5 rounded-md border border-white/20 bg-slate-900/70 px-3 py-1.5 text-xs font-semibold text-slate-100 transition hover:bg-slate-800"
+                      >
+                        <Upload size={14} />
+                        Upload Photo
+                      </button>
+                      {editForm.thumbnailUrl ? (
+                        <button
+                          type="button"
+                          onClick={() => setEditForm((prev) => ({ ...prev, thumbnailUrl: '' }))}
+                          className="rounded-md border border-white/20 px-3 py-1.5 text-xs font-semibold text-slate-200 transition hover:bg-white/10"
+                        >
+                          Remove
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                  <label htmlFor="edit-module-thumbnail-url" className="space-y-1.5">
+                    <span className="block text-xs font-semibold uppercase tracking-[0.1em] text-slate-400">Or Paste Image URL (Optional)</span>
+                    <input
+                      id="edit-module-thumbnail-url"
+                      value={editForm.thumbnailUrl}
+                      onChange={(event) => setEditForm((prev) => ({ ...prev, thumbnailUrl: event.target.value }))}
+                      placeholder="https://example.com/module-cover.png"
+                      className="w-full rounded-lg border border-white/20 bg-slate-950/80 px-3.5 py-2.5 text-sm text-slate-100 placeholder:text-slate-500 transition focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-500/25"
+                    />
+                  </label>
+                </div>
+
+                <label htmlFor="edit-module-description" className="space-y-1.5 md:col-span-2">
+                  <span className="block text-xs font-semibold uppercase tracking-[0.12em] text-slate-300">Description</span>
+                  <textarea
+                    id="edit-module-description"
+                    required
+                    value={editForm.description}
+                    onChange={(event) => setEditForm((prev) => ({ ...prev, description: event.target.value }))}
+                    placeholder="Write a short description for this module"
+                    className="h-32 w-full rounded-lg border border-white/20 bg-slate-950/80 px-3.5 py-2.5 text-sm text-slate-100 placeholder:text-slate-500 transition focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-500/25"
+                  />
+                </label>
+
+                <div className="grid gap-3 md:col-span-2 md:grid-cols-2">
+                  <label htmlFor="edit-module-publish" className="flex min-h-[92px] cursor-pointer items-center justify-between rounded-lg border border-white/15 bg-slate-950/60 px-4 py-3 transition hover:border-white/25">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-300">Publish Status</p>
+                      <p className="mt-1 text-sm font-semibold text-slate-100">{editForm.isActive ? 'Published' : 'Draft'}</p>
+                    </div>
+                    <span className="relative inline-flex h-6 w-11 items-center">
+                      <input
+                        id="edit-module-publish"
+                        type="checkbox"
+                        checked={editForm.isActive}
+                        onChange={(event) => setEditForm((prev) => ({ ...prev, isActive: event.target.checked }))}
+                        className="peer sr-only"
+                      />
+                      <span className="h-6 w-11 rounded-full bg-slate-600/80 transition peer-checked:bg-emerald-500/80" />
+                      <span className="pointer-events-none absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform peer-checked:translate-x-5" />
+                    </span>
+                  </label>
+
+                  <label htmlFor="edit-module-lock" className="flex min-h-[92px] cursor-pointer items-center justify-between rounded-lg border border-white/15 bg-slate-950/60 px-4 py-3 transition hover:border-white/25">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-300">Access Mode</p>
+                      <p className="mt-1 text-sm font-semibold text-slate-100">{editForm.isLocked ? 'Locked' : 'Unlocked'}</p>
+                    </div>
+                    <span className="relative inline-flex h-6 w-11 items-center">
+                      <input
+                        id="edit-module-lock"
+                        type="checkbox"
+                        checked={editForm.isLocked}
+                        onChange={(event) => setEditForm((prev) => ({ ...prev, isLocked: event.target.checked }))}
+                        className="peer sr-only"
+                      />
+                      <span className="h-6 w-11 rounded-full bg-slate-600/80 transition peer-checked:bg-amber-500/80" />
+                      <span className="pointer-events-none absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform peer-checked:translate-x-5" />
+                    </span>
+                  </label>
+                </div>
                 <div className="flex justify-end md:col-span-2">
                   <button disabled={busy} className="rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white">
                     {busy ? 'Saving...' : 'Save Module'}
