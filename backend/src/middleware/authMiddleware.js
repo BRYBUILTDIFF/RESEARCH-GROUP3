@@ -20,7 +20,7 @@ export const requireAuth = asyncHandler(async (req, _res, next) => {
 
   const result = await pool.query(
     `
-      SELECT id, email, full_name, role, is_active
+      SELECT id, email, full_name, role, is_active, must_change_password, password_changed_at
       FROM users
       WHERE id = $1
       LIMIT 1;
@@ -42,7 +42,20 @@ export const requireAuth = asyncHandler(async (req, _res, next) => {
     email: user.email,
     fullName: user.full_name,
     role: user.role,
+    mustChangePassword: Boolean(user.must_change_password),
+    passwordChanged: Boolean(user.password_changed_at) && !Boolean(user.must_change_password),
   };
+
+  if (req.user.mustChangePassword) {
+    const isUsersMeRead = req.baseUrl === '/api/users' && req.path === '/me' && req.method === 'GET';
+    const isUsersMeUpdate = req.baseUrl === '/api/users' && req.path === '/me' && req.method === 'PATCH';
+    const isUsersPasswordUpdate = req.baseUrl === '/api/users' && req.path === '/me/password' && req.method === 'PATCH';
+    const isAuthMeRead = req.baseUrl === '/api/auth' && req.path === '/me' && req.method === 'GET';
+
+    if (!isUsersMeRead && !isUsersMeUpdate && !isUsersPasswordUpdate && !isAuthMeRead) {
+      throw new AppError('Password change required before accessing this resource.', 403);
+    }
+  }
 
   next();
 });

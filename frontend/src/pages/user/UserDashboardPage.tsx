@@ -1,4 +1,4 @@
-import { ArrowRight, BookOpenCheck, Clock3, GraduationCap, ListChecks, Trophy } from 'lucide-react';
+import { ArrowRight, BookOpenCheck, Clock3, GraduationCap, ListChecks } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
@@ -62,17 +62,10 @@ function getAssessmentStatusClass(status: AssessmentStatusItem['status']) {
 export function UserDashboardPage() {
   const [stats, setStats] = useState({ enrollments: 0, averageScore: 0, completedModules: 0 });
   const [enrollmentSnapshots, setEnrollmentSnapshots] = useState<EnrollmentSnapshot[]>([]);
-  const [availableModules, setAvailableModules] = useState<ModuleSummary[]>([]);
   const [assessmentItems, setAssessmentItems] = useState<AssessmentStatusItem[]>([]);
   const [assessmentModuleTitle, setAssessmentModuleTitle] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
-
-  const overallCompletion = useMemo(() => {
-    if (!enrollmentSnapshots.length) return 0;
-    const total = enrollmentSnapshots.reduce((sum, item) => sum + item.completionPercent, 0);
-    return Math.round(total / enrollmentSnapshots.length);
-  }, [enrollmentSnapshots]);
 
   const continueSnapshot = useMemo(() => pickContinueSnapshot(enrollmentSnapshots), [enrollmentSnapshots]);
 
@@ -104,9 +97,6 @@ export function UserDashboardPage() {
             };
           })
         );
-
-        const enrolledIds = new Set(enrollments.map((enrollment) => enrollment.module_id));
-        const recommended = activeModules.filter((module) => !enrolledIds.has(module.id)).slice(0, 6);
 
         const currentSnapshot = pickContinueSnapshot(snapshotRows);
         if (currentSnapshot) {
@@ -162,7 +152,6 @@ export function UserDashboardPage() {
         if (!isMounted) return;
         setStats(dashboard);
         setEnrollmentSnapshots(snapshotRows);
-        setAvailableModules(recommended);
       } catch (loadError) {
         if (isMounted) {
           setError(loadError instanceof Error ? loadError.message : 'Failed to load dashboard.');
@@ -217,80 +206,57 @@ export function UserDashboardPage() {
 
       {!isLoading ? (
         <>
-          <div className="grid gap-4 lg:grid-cols-[1.3fr_1fr]">
-            <article className="rounded-xl border border-white/10 bg-slate-900/70 p-5 shadow-sm">
-              <div className="flex items-center gap-2 text-sm font-semibold text-slate-200">
-                <BookOpenCheck size={16} className="text-brand-400" />
-                Continue Where You Left Off
-              </div>
+          <article className="rounded-xl border border-white/10 bg-slate-900/70 p-5 shadow-sm">
+            <div className="flex items-center gap-2 text-sm font-semibold text-slate-200">
+              <BookOpenCheck size={16} className="text-brand-400" />
+              Continue Where You Left Off
+            </div>
 
-              {continueSnapshot ? (
-                <>
-                  <h3 className="mt-3 text-xl font-bold text-white">
-                    {continueSnapshot.module?.title ?? `Module #${continueSnapshot.enrollment.module_id}`}
-                  </h3>
-                  <p className="mt-1 text-sm text-slate-300">
-                    Next: {continueSnapshot.nextLesson?.title ?? 'Final module check'}{' '}
-                    {continueSnapshot.nextLesson?.estimated_minutes ? `- ${continueSnapshot.nextLesson.estimated_minutes} min` : ''}
+            {continueSnapshot ? (
+              <>
+                <h3 className="mt-3 text-xl font-bold text-white">
+                  {continueSnapshot.module?.title ?? `Module #${continueSnapshot.enrollment.module_id}`}
+                </h3>
+                <p className="mt-1 text-sm text-slate-300">
+                  Next: {continueSnapshot.nextLesson?.title ?? 'Final module check'}{' '}
+                  {continueSnapshot.nextLesson?.estimated_minutes ? `- ${continueSnapshot.nextLesson.estimated_minutes} min` : ''}
+                </p>
+                <div className="mt-4 rounded-lg border border-white/10 bg-white/5 px-3 py-3">
+                  <div className="mb-1.5 flex items-center justify-between text-xs font-semibold">
+                    <span className="uppercase tracking-wider text-slate-400">Overall Module Progress</span>
+                    <span className="text-brand-300">{continueSnapshot.completionPercent}%</span>
+                  </div>
+                  <div className="h-2 overflow-hidden rounded-full bg-slate-800/70">
+                    <div
+                      className="h-full rounded-full bg-brand-500"
+                      style={{ width: `${Math.max(0, Math.min(100, continueSnapshot.completionPercent))}%` }}
+                    />
+                  </div>
+                  <p className="mt-2 text-xs text-slate-300">
+                    {continueSnapshot.completedLessons}/{continueSnapshot.totalLessons} lessons completed
                   </p>
-                  <div className="mt-4 rounded-lg border border-white/10 bg-white/5 px-3 py-3">
-                    <div className="mb-1.5 flex items-center justify-between text-xs font-semibold">
-                      <span className="uppercase tracking-wider text-slate-400">Overall Module Progress</span>
-                      <span className="text-brand-300">{continueSnapshot.completionPercent}%</span>
-                    </div>
-                    <div className="h-2 overflow-hidden rounded-full bg-slate-800/70">
-                      <div
-                        className="h-full rounded-full bg-brand-500"
-                        style={{ width: `${Math.max(0, Math.min(100, continueSnapshot.completionPercent))}%` }}
-                      />
-                    </div>
-                    <p className="mt-2 text-xs text-slate-300">
-                      {continueSnapshot.completedLessons}/{continueSnapshot.totalLessons} lessons completed
-                    </p>
-                  </div>
-                  <div className="mt-4">
-                    <Link
-                      to={`/user/modules/${continueSnapshot.enrollment.module_id}`}
-                      className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-500"
-                    >
-                      Resume Module
-                      <ArrowRight size={16} />
-                    </Link>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <p className="mt-3 text-sm text-slate-300">No active module yet. Start your first module to build progress here.</p>
-                  <div className="mt-4">
-                    <Link to="/user/modules" className="rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-500">
-                      Browse Modules
-                    </Link>
-                  </div>
-                </>
-              )}
-            </article>
-
-            <article className="rounded-xl border border-white/10 bg-slate-900/70 p-5 shadow-sm">
-              <div className="flex items-center gap-2 text-sm font-semibold text-slate-200">
-                <Trophy size={16} className="text-brand-400" />
-                Learning Snapshot
-              </div>
-              <div className="mt-4 space-y-3">
-                <div className="rounded-lg border border-white/10 bg-white/5 px-3 py-2.5">
-                  <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Average Completion</p>
-                  <p className="mt-1 text-xl font-bold text-white">{overallCompletion}%</p>
                 </div>
-                <div className="rounded-lg border border-white/10 bg-white/5 px-3 py-2.5">
-                  <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Assessment Performance</p>
-                  <p className="mt-1 text-xl font-bold text-white">{stats.averageScore}%</p>
+                <div className="mt-4">
+                  <Link
+                    to={`/user/modules/${continueSnapshot.enrollment.module_id}`}
+                    className="inline-flex items-center gap-2 rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-500"
+                  >
+                    Resume Module
+                    <ArrowRight size={16} />
+                  </Link>
                 </div>
-                <div className="rounded-lg border border-white/10 bg-white/5 px-3 py-2.5">
-                  <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Modules Completed</p>
-                  <p className="mt-1 text-xl font-bold text-white">{stats.completedModules}</p>
+              </>
+            ) : (
+              <>
+                <p className="mt-3 text-sm text-slate-300">No active module yet. Start your first module to build progress here.</p>
+                <div className="mt-4">
+                  <Link to="/user/modules" className="rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-500">
+                    Browse Modules
+                  </Link>
                 </div>
-              </div>
-            </article>
-          </div>
+              </>
+            )}
+          </article>
 
           <article className="rounded-xl border border-white/10 bg-slate-900/70 p-5 shadow-sm">
             <div className="flex flex-wrap items-end justify-between gap-3 border-b border-white/10 pb-2">
@@ -327,80 +293,47 @@ export function UserDashboardPage() {
             )}
           </article>
 
-          <div className="grid gap-4 xl:grid-cols-2">
-            <article className="rounded-xl border border-white/10 bg-slate-900/70 p-5 shadow-sm">
-              <div className="flex flex-wrap items-end justify-between gap-3 border-b border-white/10 pb-2">
-                <div>
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">Your Modules</p>
-                  <h3 className="text-lg font-bold text-white">Enrolled Snapshot</h3>
-                </div>
-                <Link to="/user/modules" className="text-xs font-semibold text-brand-300 hover:underline">
-                  View All
-                </Link>
+          <article className="rounded-xl border border-white/10 bg-slate-900/70 p-5 shadow-sm">
+            <div className="flex flex-wrap items-end justify-between gap-3 border-b border-white/10 pb-2">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">Your Modules</p>
+                <h3 className="text-lg font-bold text-white">Enrolled Snapshot</h3>
               </div>
-              {enrollmentSnapshots.length ? (
-                <div className="mt-4 space-y-3">
-                  {enrollmentSnapshots.slice(0, 4).map((item) => (
-                    <div key={item.enrollment.id} className="rounded-lg border border-white/10 p-3">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="text-sm font-semibold text-white">{item.module?.title ?? `Module #${item.enrollment.module_id}`}</p>
-                          <p className="mt-0.5 text-xs text-slate-300">
-                            {item.completedLessons}/{item.totalLessons} lessons completed
-                          </p>
-                        </div>
-                        <span className="rounded-full bg-white/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-slate-200">
-                          {item.enrollment.status}
-                        </span>
+              <Link to="/user/modules" className="text-xs font-semibold text-brand-300 hover:underline">
+                View All
+              </Link>
+            </div>
+            {enrollmentSnapshots.length ? (
+              <div className="mt-4 space-y-3">
+                {enrollmentSnapshots.slice(0, 4).map((item) => (
+                  <div key={item.enrollment.id} className="rounded-lg border border-white/10 p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-sm font-semibold text-white">{item.module?.title ?? `Module #${item.enrollment.module_id}`}</p>
+                        <p className="mt-0.5 text-xs text-slate-300">
+                          {item.completedLessons}/{item.totalLessons} lessons completed
+                        </p>
                       </div>
-                      <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-800/70">
-                        <div className="h-full rounded-full bg-brand-500" style={{ width: `${Math.max(0, Math.min(100, item.completionPercent))}%` }} />
-                      </div>
-                      <div className="mt-2 flex items-center justify-between">
-                        <p className="text-xs font-semibold text-brand-300">{item.completionPercent}% complete</p>
-                        <Link to={`/user/modules/${item.enrollment.module_id}`} className="text-xs font-semibold text-brand-300 hover:underline">
-                          Continue
-                        </Link>
-                      </div>
+                      <span className="rounded-full bg-white/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-slate-200">
+                        {item.enrollment.status}
+                      </span>
                     </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="mt-4 text-sm text-slate-300">No enrolled modules yet.</p>
-              )}
-            </article>
-
-            <article className="rounded-xl border border-white/10 bg-slate-900/70 p-5 shadow-sm">
-              <div className="flex flex-wrap items-end justify-between gap-3 border-b border-white/10 pb-2">
-                <div>
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">Discover</p>
-                  <h3 className="text-lg font-bold text-white">Recommended Modules</h3>
-                </div>
-                <Link to="/user/modules" className="text-xs font-semibold text-brand-300 hover:underline">
-                  Browse Modules
-                </Link>
+                    <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-800/70">
+                      <div className="h-full rounded-full bg-brand-500" style={{ width: `${Math.max(0, Math.min(100, item.completionPercent))}%` }} />
+                    </div>
+                    <div className="mt-2 flex items-center justify-between">
+                      <p className="text-xs font-semibold text-brand-300">{item.completionPercent}% complete</p>
+                      <Link to={`/user/modules/${item.enrollment.module_id}`} className="text-xs font-semibold text-brand-300 hover:underline">
+                        Continue
+                      </Link>
+                    </div>
+                  </div>
+                ))}
               </div>
-              {availableModules.length ? (
-                <div className="mt-4 space-y-3">
-                  {availableModules.slice(0, 4).map((module) => (
-                    <div key={module.id} className="rounded-lg border border-white/10 p-3">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="text-sm font-semibold text-white">{module.title}</p>
-                          <p className="mt-1 max-h-[40px] overflow-hidden text-xs leading-5 text-slate-300">{module.description}</p>
-                        </div>
-                        <span className="rounded-full bg-white/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-slate-200">
-                          {module.category ?? 'General'}
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="mt-4 text-sm text-slate-300">You are already enrolled in all active modules.</p>
-              )}
-            </article>
-          </div>
+            ) : (
+              <p className="mt-4 text-sm text-slate-300">No enrolled modules yet.</p>
+            )}
+          </article>
         </>
       ) : null}
 

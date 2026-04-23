@@ -1,6 +1,22 @@
 
-import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, ChevronLeft, ChevronRight, Eye, Plus, Search, Trash2, Upload, X } from 'lucide-react';
+import { ChangeEvent, FormEvent, MouseEvent as ReactMouseEvent, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  AlignCenter,
+  AlignJustify,
+  AlignLeft,
+  AlignRight,
+  ArrowLeft,
+  ChevronLeft,
+  ChevronRight,
+  Eye,
+  List,
+  ListOrdered,
+  Plus,
+  Search,
+  Trash2,
+  Upload,
+  X,
+} from 'lucide-react';
 import {
   createLesson,
   createLessonContent,
@@ -10,6 +26,7 @@ import {
   createQuizQuestion,
   createTopic,
   deleteLesson,
+  deleteLessonContent,
   deleteQuestionAnswer,
   deleteQuiz,
   deleteQuizQuestion,
@@ -49,22 +66,37 @@ type ModuleForm = {
   description: string;
   category: string;
   thumbnailUrl: string;
-  prerequisiteModuleId: number | null;
   isActive: boolean;
   isLocked: boolean;
 };
 
-const MODULE_CATEGORIES = ['Hardware', 'Software', 'Networking', 'Security', 'General'];
+const MODULE_CATEGORIES = ['Hardware', 'Software', 'Security'];
+
+function normalizeModuleCategory(category: string | null | undefined): string {
+  if (!category) return 'Hardware';
+  const normalized = category.trim().toLowerCase();
+  if (normalized === 'hardware') return 'Hardware';
+  if (normalized === 'software') return 'Software';
+  if (normalized === 'security') return 'Security';
+  return 'Hardware';
+}
 
 const defaultModuleForm: ModuleForm = {
   title: '',
   description: '',
   category: 'Hardware',
   thumbnailUrl: '',
-  prerequisiteModuleId: null,
   isActive: false,
   isLocked: false,
 };
+
+const editorToolbarGroupClass =
+  'inline-flex items-center gap-1 rounded-md border border-white/10 bg-slate-950/60 px-1 py-1';
+const editorToolbarButtonClass =
+  'rounded border border-white/15 px-2 py-1 text-xs text-slate-200 transition hover:bg-white/10';
+const editorToolbarIconButtonClass =
+  'inline-flex h-7 w-7 items-center justify-center rounded border border-white/15 text-slate-200 transition hover:bg-white/10';
+const editorToolbarSelectClass = 'h-7 rounded border border-white/15 bg-slate-900 px-2 text-xs text-slate-200';
 
 function selectionKey(selection: BuilderSelection): string {
   if (selection.view === 'lesson') return `lesson:${selection.lessonId}`;
@@ -106,6 +138,25 @@ function isVideoMediaUrl(url: string | null | undefined) {
   return /^(data:video\/|https?:\/\/.*\.(mp4|webm|ogg|mov)(\?.*)?$)/i.test(url);
 }
 
+type TopicLayoutTemplate = 'template-1' | 'template-2' | 'template-3';
+
+function isTopicLayoutTemplate(value: unknown): value is TopicLayoutTemplate {
+  return value === 'template-1' || value === 'template-2' || value === 'template-3';
+}
+
+function readContentMetadata(block: LessonContentBlock | null | undefined): Record<string, unknown> {
+  if (!block || !block.metadata || typeof block.metadata !== 'object' || Array.isArray(block.metadata)) {
+    return {};
+  }
+  return block.metadata;
+}
+
+function getTopicTemplateFromBlock(block: LessonContentBlock | null | undefined): TopicLayoutTemplate {
+  const template = readContentMetadata(block).template;
+  if (isTopicLayoutTemplate(template)) return template;
+  return 'template-1';
+}
+
 export function AdminModulesPage() {
   const [modules, setModules] = useState<ModuleSummary[]>([]);
   const [builder, setBuilder] = useState<ModuleBuilderPayload | null>(null);
@@ -129,8 +180,12 @@ export function AdminModulesPage() {
 
   const [previewSelection, setPreviewSelection] = useState<BuilderSelection>({ view: 'preTest' });
   const lessonContentEditorRef = useRef<HTMLDivElement | null>(null);
-  const topicContentEditorRef = useRef<HTMLDivElement | null>(null);
+  const topicSectionEditorRefs = useRef<Record<number, HTMLDivElement | null>>({});
+  const lessonSelectionRangeRef = useRef<Range | null>(null);
+  const topicSelectionRangeRefs = useRef<Record<number, Range | null>>({});
+  const createThumbnailInputRef = useRef<HTMLInputElement | null>(null);
   const editThumbnailInputRef = useRef<HTMLInputElement | null>(null);
+  const [activeTopicSectionId, setActiveTopicSectionId] = useState<number | null>(null);
 
   const run = async (task: () => Promise<void>) => {
     setBusy(true);
@@ -268,12 +323,20 @@ export function AdminModulesPage() {
 
   const selectedQuestions = currentQuiz ? questionsByQuiz.get(currentQuiz.id) ?? [] : [];
   const selectedContentBlocks = currentTopic ? contentByTopic.get(currentTopic.id) ?? [] : [];
-  const selectedTopicPrimaryContent = selectedContentBlocks[0] ?? null;
+  const selectedTopicSections = selectedContentBlocks;
 
   useEffect(() => {
-    if (selection.view !== 'topic' || !currentTopic || !topicContentEditorRef.current) return;
-    topicContentEditorRef.current.innerHTML = sanitizeRichHtml(selectedTopicPrimaryContent?.body_text ?? '');
-  }, [selection.view, currentTopic?.id, selectedTopicPrimaryContent?.id, selectedTopicPrimaryContent?.body_text]);
+    if (selection.view !== 'topic' || !currentTopic) return;
+    for (const section of selectedTopicSections) {
+      const editor = topicSectionEditorRefs.current[section.id];
+      if (editor) editor.innerHTML = sanitizeRichHtml(section.body_text ?? '');
+    }
+    setActiveTopicSectionId((prev) => {
+      if (selectedTopicSections.length === 0) return null;
+      if (prev && selectedTopicSections.some((section) => section.id === prev)) return prev;
+      return selectedTopicSections[0].id;
+    });
+  }, [selection.view, currentTopic?.id, selectedTopicSections]);
 
   const sequence = useMemo(() => {
     const list: Array<{ label: string; selection: BuilderSelection }> = [{ label: 'Pre-Test', selection: { view: 'preTest' } }];
@@ -345,9 +408,8 @@ export function AdminModulesPage() {
     setEditForm({
       title: module.title,
       description: module.description,
-      category: module.category ?? 'Hardware',
+      category: normalizeModuleCategory(module.category),
       thumbnailUrl: module.thumbnail_url ?? '',
-      prerequisiteModuleId: module.prerequisite_module_id,
       isActive: module.is_active,
       isLocked: module.is_locked,
     });
@@ -363,11 +425,10 @@ export function AdminModulesPage() {
         category: createForm.category,
         thumbnailUrl: createForm.thumbnailUrl || undefined,
       });
-      if (createForm.isActive !== true || createForm.isLocked || createForm.prerequisiteModuleId !== null) {
+      if (createForm.isActive !== true || createForm.isLocked) {
         await updateModule(created.module.id, {
           isActive: createForm.isActive,
           isLocked: createForm.isLocked,
-          prerequisiteModuleId: createForm.prerequisiteModuleId,
         });
       }
       await loadModules();
@@ -386,7 +447,7 @@ export function AdminModulesPage() {
         description: editForm.description,
         category: editForm.category,
         thumbnailUrl: editForm.thumbnailUrl,
-        prerequisiteModuleId: editForm.prerequisiteModuleId,
+        prerequisiteModuleId: null,
         isActive: editForm.isActive,
         isLocked: editForm.isLocked,
       });
@@ -394,6 +455,27 @@ export function AdminModulesPage() {
       if (builder && builder.module.id === editModuleId) await loadBuilder(editModuleId, selection);
       setShowEditModal(false);
     });
+  };
+
+  const handleCreateThumbnailUpload = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      setError('Please select an image file for the module thumbnail.');
+      event.target.value = '';
+      return;
+    }
+
+    try {
+      const imageDataUrl = await toDataUrl(file);
+      setCreateForm((prev) => ({ ...prev, thumbnailUrl: imageDataUrl }));
+      setError('');
+    } catch {
+      setError('Failed to read selected image.');
+    } finally {
+      event.target.value = '';
+    }
   };
 
   const handleEditThumbnailUpload = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -507,10 +589,12 @@ export function AdminModulesPage() {
 
   const saveCurrentTopic = async () => {
     if (!builder || !currentTopic) return;
-    const topicContentHtml = sanitizeRichHtml(topicContentEditorRef.current?.innerHTML ?? selectedContentBlocks[0]?.body_text ?? '');
-    const primaryContentBlock = selectedContentBlocks[0] ?? null;
-    if (primaryContentBlock) {
-      updateContentLocal(primaryContentBlock.id, { title: currentTopic.title, body_text: topicContentHtml });
+    for (const [index, section] of selectedTopicSections.entries()) {
+      const sectionBodyHtml = sanitizeRichHtml(topicSectionEditorRefs.current[section.id]?.innerHTML ?? section.body_text ?? '');
+      updateContentLocal(section.id, {
+        title: `${currentTopic.title} - Section ${index + 1}`,
+        body_text: sectionBodyHtml,
+      });
     }
     await run(async () => {
       await updateTopic(currentTopic.id, {
@@ -519,24 +603,22 @@ export function AdminModulesPage() {
         sortOrder: currentTopic.sort_order,
         isPublished: currentTopic.is_published,
       });
-      if (primaryContentBlock) {
-        await updateLessonContent(primaryContentBlock.id, {
+      for (const [index, section] of selectedTopicSections.entries()) {
+        const sectionBodyHtml = sanitizeRichHtml(topicSectionEditorRefs.current[section.id]?.innerHTML ?? section.body_text ?? '');
+        const sectionTemplate = getTopicTemplateFromBlock(section);
+        await updateLessonContent(section.id, {
           topicId: currentTopic.id,
-          contentType: primaryContentBlock.content_type,
-          title: currentTopic.title,
-          bodyText: topicContentHtml,
-          contentUrl: primaryContentBlock.content_url ?? '',
-          simulationKey: primaryContentBlock.simulation_key ?? '',
-          sortOrder: primaryContentBlock.sort_order,
-          isRequired: primaryContentBlock.is_required,
-        });
-      } else if (topicContentHtml.trim()) {
-        await createLessonContent({
-          topicId: currentTopic.id,
-          contentType: 'text',
-          title: currentTopic.title,
-          bodyText: topicContentHtml,
-          sortOrder: 1,
+          contentType: section.content_type,
+          title: `${currentTopic.title} - Section ${index + 1}`,
+          bodyText: sectionBodyHtml,
+          contentUrl: section.content_url ?? '',
+          simulationKey: section.simulation_key ?? '',
+          metadata: {
+            ...readContentMetadata(section),
+            template: sectionTemplate,
+          },
+          sortOrder: section.sort_order,
+          isRequired: section.is_required,
         });
       }
       await loadBuilder(builder.module.id, { view: 'topic', lessonId: currentTopic.lesson_id, topicId: currentTopic.id });
@@ -688,60 +770,166 @@ export function AdminModulesPage() {
     updateLessonLocal(currentLesson.id, { overview_image_url: dataUrl });
   };
 
-  const uploadTopicMedia = async (file: File) => {
+  const uploadTopicMedia = async (section: LessonContentBlock, file: File, sectionIndex: number) => {
     if (!builder || !currentTopic) return;
     const dataUrl = await toDataUrl(file);
     const contentType: LessonContentBlock['content_type'] = file.type.startsWith('video/') ? 'video' : 'image';
-    const primaryContentBlock = selectedContentBlocks[0] ?? null;
-    const topicContentHtml = sanitizeRichHtml(topicContentEditorRef.current?.innerHTML ?? primaryContentBlock?.body_text ?? '');
+    const topicContentHtml = sanitizeRichHtml(topicSectionEditorRefs.current[section.id]?.innerHTML ?? section.body_text ?? '');
 
-    if (primaryContentBlock) {
-      updateContentLocal(primaryContentBlock.id, {
-        title: currentTopic.title,
-        body_text: topicContentHtml,
-        content_type: contentType,
-        content_url: dataUrl,
-      });
-    }
+    updateContentLocal(section.id, {
+      title: `${currentTopic.title} - Section ${sectionIndex + 1}`,
+      body_text: topicContentHtml,
+      content_type: contentType,
+      content_url: dataUrl,
+    });
 
     await run(async () => {
-      if (primaryContentBlock) {
-        await updateLessonContent(primaryContentBlock.id, {
-          topicId: currentTopic.id,
-          contentType,
-          title: currentTopic.title,
-          bodyText: topicContentHtml,
-          contentUrl: dataUrl,
-          simulationKey: primaryContentBlock.simulation_key ?? '',
-          sortOrder: primaryContentBlock.sort_order,
-          isRequired: primaryContentBlock.is_required,
-        });
-      } else {
-        await createLessonContent({
-          topicId: currentTopic.id,
-          contentType,
-          title: currentTopic.title,
-          bodyText: topicContentHtml,
-          contentUrl: dataUrl,
-          sortOrder: 1,
-        });
-      }
+      await updateLessonContent(section.id, {
+        topicId: currentTopic.id,
+        contentType,
+        title: `${currentTopic.title} - Section ${sectionIndex + 1}`,
+        bodyText: topicContentHtml,
+        contentUrl: dataUrl,
+        simulationKey: section.simulation_key ?? '',
+        metadata: {
+          ...readContentMetadata(section),
+          template: getTopicTemplateFromBlock(section),
+        },
+        sortOrder: section.sort_order,
+        isRequired: section.is_required,
+      });
       await loadBuilder(builder.module.id, { view: 'topic', lessonId: currentTopic.lesson_id, topicId: currentTopic.id });
     });
+  };
+
+  const removeTopicMedia = async (section: LessonContentBlock, sectionIndex: number) => {
+    if (!builder || !currentTopic) return;
+    const topicContentHtml = sanitizeRichHtml(topicSectionEditorRefs.current[section.id]?.innerHTML ?? section.body_text ?? '');
+
+    updateContentLocal(section.id, {
+      title: `${currentTopic.title} - Section ${sectionIndex + 1}`,
+      body_text: topicContentHtml,
+      content_type: 'text',
+      content_url: '',
+    });
+
+    await run(async () => {
+      await updateLessonContent(section.id, {
+        topicId: currentTopic.id,
+        contentType: 'text',
+        title: `${currentTopic.title} - Section ${sectionIndex + 1}`,
+        bodyText: topicContentHtml,
+        contentUrl: '',
+        simulationKey: section.simulation_key ?? '',
+        metadata: {
+          ...readContentMetadata(section),
+          template: getTopicTemplateFromBlock(section),
+        },
+        sortOrder: section.sort_order,
+        isRequired: section.is_required,
+      });
+      await loadBuilder(builder.module.id, { view: 'topic', lessonId: currentTopic.lesson_id, topicId: currentTopic.id });
+    });
+  };
+
+  const addTopicSection = async () => {
+    if (!builder || !currentTopic) return;
+    const nextSectionNumber = selectedTopicSections.length + 1;
+    const nextSortOrder = (selectedTopicSections.at(-1)?.sort_order ?? 0) + 1;
+    await run(async () => {
+      await createLessonContent({
+        topicId: currentTopic.id,
+        contentType: 'text',
+        title: `${currentTopic.title} - Section ${nextSectionNumber}`,
+        bodyText: '',
+        metadata: { template: 'template-1' },
+        sortOrder: nextSortOrder,
+      });
+      await loadBuilder(builder.module.id, { view: 'topic', lessonId: currentTopic.lesson_id, topicId: currentTopic.id });
+    });
+  };
+
+  const removeTopicSection = async (sectionId: number) => {
+    if (!builder || !currentTopic) return;
+    await run(async () => {
+      await deleteLessonContent(sectionId);
+      await loadBuilder(builder.module.id, { view: 'topic', lessonId: currentTopic.lesson_id, topicId: currentTopic.id });
+    });
+  };
+
+  const getSelectionRangeInsideEditor = (editor: HTMLElement): Range | null => {
+    const selectionRange = window.getSelection();
+    if (!selectionRange || selectionRange.rangeCount === 0) return null;
+    const range = selectionRange.getRangeAt(0);
+    if (!editor.contains(range.startContainer) || !editor.contains(range.endContainer)) return null;
+    return range;
+  };
+
+  const restoreSelectionRange = (range: Range | null) => {
+    if (!range) return false;
+    const selectionRange = window.getSelection();
+    if (!selectionRange) return false;
+    selectionRange.removeAllRanges();
+    selectionRange.addRange(range);
+    return true;
+  };
+
+  const rememberLessonEditorSelection = () => {
+    const editor = lessonContentEditorRef.current;
+    if (!editor) {
+      lessonSelectionRangeRef.current = null;
+      return;
+    }
+    const range = getSelectionRangeInsideEditor(editor);
+    lessonSelectionRangeRef.current = range ? range.cloneRange() : null;
+  };
+
+  const rememberTopicEditorSelection = (sectionId: number) => {
+    const editor = topicSectionEditorRefs.current[sectionId];
+    if (!editor) {
+      topicSelectionRangeRefs.current[sectionId] = null;
+      return;
+    }
+    const range = getSelectionRangeInsideEditor(editor);
+    topicSelectionRangeRefs.current[sectionId] = range ? range.cloneRange() : null;
+  };
+
+  const preventToolbarButtonBlur = (event: ReactMouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
   };
 
   const applyLessonContentCommand = (command: string, value?: string) => {
     const editor = lessonContentEditorRef.current;
     if (!editor) return;
+
     editor.focus();
+    restoreSelectionRange(lessonSelectionRangeRef.current);
+    const currentRange = getSelectionRangeInsideEditor(editor);
+    if (!currentRange || currentRange.collapsed) {
+      setError('Highlight text first before using formatting tools.');
+      return;
+    }
+
     document.execCommand(command, false, value ?? null);
+    setError('');
+    rememberLessonEditorSelection();
   };
 
-  const applyTopicContentCommand = (command: string, value?: string) => {
-    const editor = topicContentEditorRef.current;
+  const applyTopicContentCommand = (sectionId: number, command: string, value?: string) => {
+    const editor = topicSectionEditorRefs.current[sectionId];
     if (!editor) return;
+
     editor.focus();
+    restoreSelectionRange(topicSelectionRangeRefs.current[sectionId] ?? null);
+    const currentRange = getSelectionRangeInsideEditor(editor);
+    if (!currentRange || currentRange.collapsed) {
+      setError('Highlight text first before using formatting tools.');
+      return;
+    }
+
     document.execCommand(command, false, value ?? null);
+    setError('');
+    rememberTopicEditorSelection(sectionId);
   };
 
   const openPreview = () => {
@@ -764,8 +952,7 @@ export function AdminModulesPage() {
       : null;
   const previewCurrentTopic =
     previewSelection.view === 'topic' ? builder?.topics.find((topic) => topic.id === previewSelection.topicId) ?? null : null;
-  const previewTopicContent = previewCurrentTopic ? contentByTopic.get(previewCurrentTopic.id) ?? [] : [];
-  const previewTopicPrimaryContent = previewTopicContent[0] ?? null;
+  const previewTopicSections = previewCurrentTopic ? contentByTopic.get(previewCurrentTopic.id) ?? [] : [];
 
   return (
     <section className="space-y-5">
@@ -803,7 +990,7 @@ export function AdminModulesPage() {
               <article key={module.id} className="flex h-full flex-col rounded-xl border border-white/10 bg-slate-900/70 p-5 shadow-sm">
                 <div className="flex items-center justify-between">
                   <span className="rounded-full bg-white/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-slate-200">
-                    {module.category ?? 'General'}
+                    {normalizeModuleCategory(module.category)}
                   </span>
                   <button
                     onClick={() => openModuleEdit(module)}
@@ -898,52 +1085,124 @@ export function AdminModulesPage() {
                       <label className="space-y-1">
                         <span className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Lesson Content</span>
                         <div className="overflow-hidden rounded-md border border-white/15 bg-slate-900/70">
-                          <div className="flex flex-wrap items-center gap-1 border-b border-white/10 p-2">
-                            <button type="button" onClick={() => applyLessonContentCommand('bold')} className="rounded border border-white/15 px-2 py-1 text-xs text-slate-200">B</button>
-                            <button type="button" onClick={() => applyLessonContentCommand('italic')} className="rounded border border-white/15 px-2 py-1 text-xs italic text-slate-200">I</button>
-                            <button type="button" onClick={() => applyLessonContentCommand('underline')} className="rounded border border-white/15 px-2 py-1 text-xs underline text-slate-200">U</button>
-                            <button type="button" onClick={() => applyLessonContentCommand('insertUnorderedList')} className="rounded border border-white/15 px-2 py-1 text-xs text-slate-200">• List</button>
-                            <button type="button" onClick={() => applyLessonContentCommand('insertOrderedList')} className="rounded border border-white/15 px-2 py-1 text-xs text-slate-200">1. List</button>
-                            <select
-                              defaultValue=""
-                              onChange={(event) => {
-                                const value = event.target.value;
-                                if (!value) return;
-                                applyLessonContentCommand('fontSize', value);
-                                event.target.value = '';
-                              }}
-                              className="rounded border border-white/15 bg-slate-900 px-2 py-1 text-xs text-slate-200"
-                            >
-                              <option value="">Size</option>
-                              <option value="2">Small</option>
-                              <option value="3">Normal</option>
-                              <option value="5">Large</option>
-                              <option value="6">X-Large</option>
-                            </select>
-                            <select
-                              defaultValue=""
-                              onChange={(event) => {
-                                const value = event.target.value;
-                                if (!value) return;
-                                applyLessonContentCommand('foreColor', value);
-                                event.target.value = '';
-                              }}
-                              className="rounded border border-white/15 bg-slate-900 px-2 py-1 text-xs text-slate-200"
-                            >
-                              <option value="">Color</option>
-                              <option value="#f5c800">Yellow</option>
-                              <option value="#4a8fe8">Blue</option>
-                              <option value="#4caf7d">Green</option>
-                              <option value="#e05c5c">Red</option>
-                              <option value="#e8eaf0">White</option>
-                            </select>
-                            <button type="button" onClick={() => applyLessonContentCommand('removeFormat')} className="rounded border border-white/15 px-2 py-1 text-xs text-slate-200">Clear</button>
+                          <div className="flex flex-wrap items-center gap-2 border-b border-white/10 p-2">
+                            <div className={editorToolbarGroupClass}>
+                              <button type="button" onMouseDown={preventToolbarButtonBlur} onClick={() => applyLessonContentCommand('bold')} className={editorToolbarButtonClass}>B</button>
+                              <button type="button" onMouseDown={preventToolbarButtonBlur} onClick={() => applyLessonContentCommand('italic')} className={`${editorToolbarButtonClass} italic`}>I</button>
+                              <button type="button" onMouseDown={preventToolbarButtonBlur} onClick={() => applyLessonContentCommand('underline')} className={`${editorToolbarButtonClass} underline`}>U</button>
+                            </div>
+                            <div className={editorToolbarGroupClass}>
+                              <button
+                                type="button"
+                                onMouseDown={preventToolbarButtonBlur}
+                                onClick={() => applyLessonContentCommand('insertUnorderedList')}
+                                className={editorToolbarIconButtonClass}
+                                title="Bulleted list"
+                                aria-label="Bulleted list"
+                              >
+                                <List size={14} />
+                              </button>
+                              <button
+                                type="button"
+                                onMouseDown={preventToolbarButtonBlur}
+                                onClick={() => applyLessonContentCommand('insertOrderedList')}
+                                className={editorToolbarIconButtonClass}
+                                title="Numbered list"
+                                aria-label="Numbered list"
+                              >
+                                <ListOrdered size={14} />
+                              </button>
+                            </div>
+                            <div className={editorToolbarGroupClass}>
+                              <button
+                                type="button"
+                                onMouseDown={preventToolbarButtonBlur}
+                                onClick={() => applyLessonContentCommand('justifyLeft')}
+                                className={editorToolbarIconButtonClass}
+                                title="Align left"
+                                aria-label="Align left"
+                              >
+                                <AlignLeft size={14} />
+                              </button>
+                              <button
+                                type="button"
+                                onMouseDown={preventToolbarButtonBlur}
+                                onClick={() => applyLessonContentCommand('justifyCenter')}
+                                className={editorToolbarIconButtonClass}
+                                title="Align center"
+                                aria-label="Align center"
+                              >
+                                <AlignCenter size={14} />
+                              </button>
+                              <button
+                                type="button"
+                                onMouseDown={preventToolbarButtonBlur}
+                                onClick={() => applyLessonContentCommand('justifyRight')}
+                                className={editorToolbarIconButtonClass}
+                                title="Align right"
+                                aria-label="Align right"
+                              >
+                                <AlignRight size={14} />
+                              </button>
+                              <button
+                                type="button"
+                                onMouseDown={preventToolbarButtonBlur}
+                                onClick={() => applyLessonContentCommand('justifyFull')}
+                                className={editorToolbarIconButtonClass}
+                                title="Justify"
+                                aria-label="Justify"
+                              >
+                                <AlignJustify size={14} />
+                              </button>
+                            </div>
+                            <div className={editorToolbarGroupClass}>
+                              <select
+                                defaultValue=""
+                                onMouseDown={rememberLessonEditorSelection}
+                                onChange={(event) => {
+                                  const value = event.target.value;
+                                  if (!value) return;
+                                  applyLessonContentCommand('fontSize', value);
+                                  event.target.value = '';
+                                }}
+                                className={editorToolbarSelectClass}
+                              >
+                                <option value="">Size</option>
+                                <option value="2">Small</option>
+                                <option value="3">Normal</option>
+                                <option value="5">Large</option>
+                                <option value="6">X-Large</option>
+                              </select>
+                              <select
+                                defaultValue=""
+                                onMouseDown={rememberLessonEditorSelection}
+                                onChange={(event) => {
+                                  const value = event.target.value;
+                                  if (!value) return;
+                                  applyLessonContentCommand('foreColor', value);
+                                  event.target.value = '';
+                                }}
+                                className={editorToolbarSelectClass}
+                              >
+                                <option value="">Color</option>
+                                <option value="#f5c800">Yellow</option>
+                                <option value="#4a8fe8">Blue</option>
+                                <option value="#4caf7d">Green</option>
+                                <option value="#e05c5c">Red</option>
+                                <option value="#e8eaf0">White</option>
+                              </select>
+                              <button type="button" onMouseDown={preventToolbarButtonBlur} onClick={() => applyLessonContentCommand('removeFormat')} className={editorToolbarButtonClass}>Clear</button>
+                            </div>
                           </div>
                           <div
                             ref={lessonContentEditorRef}
                             contentEditable
                             suppressContentEditableWarning
+                            onFocus={rememberLessonEditorSelection}
+                            onMouseUp={rememberLessonEditorSelection}
+                            onKeyUp={rememberLessonEditorSelection}
                             onBlur={(event) => {
+                              rememberLessonEditorSelection();
                               updateLessonLocal(currentLesson.id, { overview_text: sanitizeRichHtml(event.currentTarget.innerHTML) });
                             }}
                             className="min-h-[180px] p-3 text-sm text-slate-100 outline-none"
@@ -990,93 +1249,274 @@ export function AdminModulesPage() {
                         <label className="space-y-1"><span className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Topic Title</span><input value={currentTopic.title} onChange={(event) => updateTopicLocal(currentTopic.id, { title: event.target.value })} className="w-full rounded-md border border-white/15 bg-slate-900/70 px-3 py-2 text-sm text-slate-100" /></label>
                         <label className="space-y-1"><span className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Topic Order</span><input type="number" min={1} value={currentTopic.sort_order} onChange={(event) => updateTopicLocal(currentTopic.id, { sort_order: Number(event.target.value) || 1 })} className="w-full rounded-md border border-white/15 bg-slate-900/70 px-3 py-2 text-sm text-slate-100" /></label>
                       </div>
-                      <div className="space-y-2">
-                        <span className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Topic Content</span>
-                        <div className="grid gap-4 xl:grid-cols-[1fr_320px]">
-                          <div className="rounded-md border border-white/15 bg-slate-900/70">
-                            <div className="flex flex-wrap items-center gap-2 border-b border-white/10 p-2">
-                              <button type="button" onClick={() => applyTopicContentCommand('bold')} className="rounded border border-white/15 px-2 py-1 text-xs text-slate-200">B</button>
-                              <button type="button" onClick={() => applyTopicContentCommand('italic')} className="rounded border border-white/15 px-2 py-1 text-xs italic text-slate-200">I</button>
-                              <button type="button" onClick={() => applyTopicContentCommand('underline')} className="rounded border border-white/15 px-2 py-1 text-xs underline text-slate-200">U</button>
-                              <button type="button" onClick={() => applyTopicContentCommand('insertUnorderedList')} className="rounded border border-white/15 px-2 py-1 text-xs text-slate-200">• List</button>
-                              <button type="button" onClick={() => applyTopicContentCommand('insertOrderedList')} className="rounded border border-white/15 px-2 py-1 text-xs text-slate-200">1. List</button>
-                              <select
-                                defaultValue=""
-                                onChange={(event) => {
-                                  const value = event.target.value;
-                                  if (!value) return;
-                                  applyTopicContentCommand('fontSize', value);
-                                  event.target.value = '';
-                                }}
-                                className="rounded border border-white/15 bg-slate-900 px-2 py-1 text-xs text-slate-200"
-                              >
-                                <option value="">Size</option>
-                                <option value="1">Small</option>
-                                <option value="3">Normal</option>
-                                <option value="5">Large</option>
-                                <option value="7">X-Large</option>
-                              </select>
-                              <select
-                                defaultValue=""
-                                onChange={(event) => {
-                                  const value = event.target.value;
-                                  if (!value) return;
-                                  applyTopicContentCommand('foreColor', value);
-                                  event.target.value = '';
-                                }}
-                                className="rounded border border-white/15 bg-slate-900 px-2 py-1 text-xs text-slate-200"
-                              >
-                                <option value="">Color</option>
-                                <option value="#f5c800">Yellow</option>
-                                <option value="#4a8fe8">Blue</option>
-                                <option value="#4caf7d">Green</option>
-                                <option value="#e05c5c">Red</option>
-                                <option value="#e8eaf0">White</option>
-                              </select>
-                              <button type="button" onClick={() => applyTopicContentCommand('removeFormat')} className="rounded border border-white/15 px-2 py-1 text-xs text-slate-200">Clear</button>
-                            </div>
-                            <div
-                              ref={topicContentEditorRef}
-                              contentEditable
-                              suppressContentEditableWarning
-                              onBlur={(event) => {
-                                const topicBody = sanitizeRichHtml(event.currentTarget.innerHTML);
-                                if (selectedTopicPrimaryContent) {
-                                  updateContentLocal(selectedTopicPrimaryContent.id, { body_text: topicBody, title: currentTopic.title });
-                                }
-                              }}
-                              className="min-h-[280px] p-3 text-sm text-slate-100 outline-none"
-                            />
-                          </div>
-                          <div className="space-y-2">
-                            <span className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Upload Photo/Video</span>
-                            <label className="flex min-h-[280px] cursor-pointer flex-col items-center justify-center gap-3 rounded-md border-2 border-dashed border-white/25 bg-slate-900/60 p-6 text-center hover:border-brand-400/70 hover:bg-slate-900/80">
-                              {selectedTopicPrimaryContent?.content_url ? (
-                                isVideoMediaUrl(selectedTopicPrimaryContent.content_url) ? (
-                                  <video src={selectedTopicPrimaryContent.content_url} controls className="max-h-[260px] w-full rounded-md object-contain" />
-                                ) : (
-                                  <img src={selectedTopicPrimaryContent.content_url} alt={currentTopic.title} className="max-h-[260px] w-full rounded-md object-contain" />
-                                )
-                              ) : (
-                                <>
-                                  <Upload size={36} className="text-slate-300" />
-                                  <p className="text-lg font-semibold text-slate-200">UPLOAD PHOTO/VIDEO</p>
-                                  <p className="text-xs text-slate-400">PNG, JPG, WEBP, GIF, MP4, WEBM</p>
-                                </>
-                              )}
-                              <input
-                                type="file"
-                                accept="image/*,video/*"
-                                className="hidden"
-                                onChange={(event) => {
-                                  const file = event.target.files?.[0];
-                                  if (!file) return;
-                                  void uploadTopicMedia(file);
-                                }}
-                              />
-                            </label>
-                          </div>
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Topic Sections</span>
+                          <button
+                            type="button"
+                            onClick={() => void addTopicSection()}
+                            className="inline-flex items-center gap-1 rounded-full border border-white/20 px-3 py-1.5 text-xs font-semibold text-slate-200 hover:bg-white/10"
+                          >
+                            <Plus size={14} />
+                            Add Section
+                          </button>
                         </div>
+
+                        {selectedTopicSections.length === 0 ? (
+                          <div className="rounded-md border border-dashed border-white/20 bg-slate-900/40 p-4 text-center">
+                            <p className="text-sm text-slate-300">No topic sections yet. Click Add Section to create your first content block.</p>
+                          </div>
+                        ) : null}
+
+                        {selectedTopicSections.map((section, sectionIndex) => {
+                          const sectionTemplate = getTopicTemplateFromBlock(section);
+                          const sectionMediaUrl = section.content_url ?? '';
+                          const hasSectionMedia = Boolean(sectionMediaUrl);
+                          return (
+                            <div
+                              key={section.id}
+                              className={`space-y-3 rounded-lg border p-3 ${
+                                activeTopicSectionId === section.id
+                                  ? 'border-brand-400/50 bg-slate-900/70'
+                                  : 'border-white/10 bg-slate-900/45'
+                              }`}
+                            >
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-300">Section {sectionIndex + 1}</p>
+                                <div className="flex items-center gap-2">
+                                  <label className="inline-flex items-center gap-2 text-xs text-slate-300">
+                                    <span className="font-semibold uppercase tracking-[0.12em] text-slate-400">Topic ContentTopic Template</span>
+                                    <select
+                                      value={sectionTemplate}
+                                      onChange={(event) => {
+                                        const value = event.target.value;
+                                        if (!isTopicLayoutTemplate(value)) return;
+                                        updateContentLocal(section.id, {
+                                          metadata: {
+                                            ...readContentMetadata(section),
+                                            template: value,
+                                          },
+                                        });
+                                      }}
+                                      className="rounded border border-white/15 bg-slate-900 px-2 py-1 text-xs text-slate-200"
+                                    >
+                                      <option value="template-1">Template 1 - Text left, media right (Default)</option>
+                                      <option value="template-2">Template 2 - Text then media</option>
+                                      <option value="template-3">Template 3 - Media left, text right</option>
+                                    </select>
+                                  </label>
+                                  {selectedTopicSections.length > 1 ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => void removeTopicSection(section.id)}
+                                      className="inline-flex items-center gap-1 rounded-full border border-white/20 px-2 py-1 text-xs text-slate-300 hover:bg-white/10"
+                                    >
+                                      <X size={12} />
+                                      Hide
+                                    </button>
+                                  ) : null}
+                                </div>
+                              </div>
+
+                              <div
+                                className={
+                                  sectionTemplate === 'template-2'
+                                    ? 'space-y-3'
+                                    : hasSectionMedia
+                                      ? `grid gap-4 xl:items-start ${
+                                        sectionTemplate === 'template-3'
+                                          ? 'xl:grid-cols-[320px_minmax(0,1fr)]'
+                                          : 'xl:grid-cols-[minmax(0,1fr)_320px]'
+                                      }`
+                                      : 'space-y-3'
+                                }
+                              >
+                                <div className={`rounded-md border border-white/15 bg-slate-900/70 ${sectionTemplate === 'template-3' && hasSectionMedia ? 'xl:order-2' : ''}`}>
+                                  <div className="flex flex-wrap items-center gap-2 border-b border-white/10 p-2">
+                                    <div className={editorToolbarGroupClass}>
+                                      <button type="button" onMouseDown={preventToolbarButtonBlur} onClick={() => applyTopicContentCommand(section.id, 'bold')} className={editorToolbarButtonClass}>B</button>
+                                      <button type="button" onMouseDown={preventToolbarButtonBlur} onClick={() => applyTopicContentCommand(section.id, 'italic')} className={`${editorToolbarButtonClass} italic`}>I</button>
+                                      <button type="button" onMouseDown={preventToolbarButtonBlur} onClick={() => applyTopicContentCommand(section.id, 'underline')} className={`${editorToolbarButtonClass} underline`}>U</button>
+                                    </div>
+                                    <div className={editorToolbarGroupClass}>
+                                      <button
+                                        type="button"
+                                        onMouseDown={preventToolbarButtonBlur}
+                                        onClick={() => applyTopicContentCommand(section.id, 'insertUnorderedList')}
+                                        className={editorToolbarIconButtonClass}
+                                        title="Bulleted list"
+                                        aria-label="Bulleted list"
+                                      >
+                                        <List size={14} />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onMouseDown={preventToolbarButtonBlur}
+                                        onClick={() => applyTopicContentCommand(section.id, 'insertOrderedList')}
+                                        className={editorToolbarIconButtonClass}
+                                        title="Numbered list"
+                                        aria-label="Numbered list"
+                                      >
+                                        <ListOrdered size={14} />
+                                      </button>
+                                    </div>
+                                    <div className={editorToolbarGroupClass}>
+                                      <button
+                                        type="button"
+                                        onMouseDown={preventToolbarButtonBlur}
+                                        onClick={() => applyTopicContentCommand(section.id, 'justifyLeft')}
+                                        className={editorToolbarIconButtonClass}
+                                        title="Align left"
+                                        aria-label="Align left"
+                                      >
+                                        <AlignLeft size={14} />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onMouseDown={preventToolbarButtonBlur}
+                                        onClick={() => applyTopicContentCommand(section.id, 'justifyCenter')}
+                                        className={editorToolbarIconButtonClass}
+                                        title="Align center"
+                                        aria-label="Align center"
+                                      >
+                                        <AlignCenter size={14} />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onMouseDown={preventToolbarButtonBlur}
+                                        onClick={() => applyTopicContentCommand(section.id, 'justifyRight')}
+                                        className={editorToolbarIconButtonClass}
+                                        title="Align right"
+                                        aria-label="Align right"
+                                      >
+                                        <AlignRight size={14} />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onMouseDown={preventToolbarButtonBlur}
+                                        onClick={() => applyTopicContentCommand(section.id, 'justifyFull')}
+                                        className={editorToolbarIconButtonClass}
+                                        title="Justify"
+                                        aria-label="Justify"
+                                      >
+                                        <AlignJustify size={14} />
+                                      </button>
+                                    </div>
+                                    <div className={editorToolbarGroupClass}>
+                                      <select
+                                        defaultValue=""
+                                        onMouseDown={() => rememberTopicEditorSelection(section.id)}
+                                        onChange={(event) => {
+                                          const value = event.target.value;
+                                          if (!value) return;
+                                          applyTopicContentCommand(section.id, 'fontSize', value);
+                                          event.target.value = '';
+                                        }}
+                                        className={editorToolbarSelectClass}
+                                      >
+                                        <option value="">Size</option>
+                                        <option value="1">Small</option>
+                                        <option value="3">Normal</option>
+                                        <option value="5">Large</option>
+                                        <option value="7">X-Large</option>
+                                      </select>
+                                      <select
+                                        defaultValue=""
+                                        onMouseDown={() => rememberTopicEditorSelection(section.id)}
+                                        onChange={(event) => {
+                                          const value = event.target.value;
+                                          if (!value) return;
+                                          applyTopicContentCommand(section.id, 'foreColor', value);
+                                          event.target.value = '';
+                                        }}
+                                        className={editorToolbarSelectClass}
+                                      >
+                                        <option value="">Color</option>
+                                        <option value="#f5c800">Yellow</option>
+                                        <option value="#4a8fe8">Blue</option>
+                                        <option value="#4caf7d">Green</option>
+                                        <option value="#e05c5c">Red</option>
+                                        <option value="#e8eaf0">White</option>
+                                      </select>
+                                      <button type="button" onMouseDown={preventToolbarButtonBlur} onClick={() => applyTopicContentCommand(section.id, 'removeFormat')} className={editorToolbarButtonClass}>Clear</button>
+                                    </div>
+                                  </div>
+                                  <div
+                                    ref={(element) => {
+                                      topicSectionEditorRefs.current[section.id] = element;
+                                    }}
+                                    contentEditable
+                                    suppressContentEditableWarning
+                                    onFocus={() => {
+                                      setActiveTopicSectionId(section.id);
+                                      rememberTopicEditorSelection(section.id);
+                                    }}
+                                    onMouseUp={() => rememberTopicEditorSelection(section.id)}
+                                    onKeyUp={() => rememberTopicEditorSelection(section.id)}
+                                    onBlur={(event) => {
+                                      rememberTopicEditorSelection(section.id);
+                                      const topicBody = sanitizeRichHtml(event.currentTarget.innerHTML);
+                                      updateContentLocal(section.id, {
+                                        title: `${currentTopic.title} - Section ${sectionIndex + 1}`,
+                                        body_text: topicBody,
+                                      });
+                                    }}
+                                    className="min-h-[280px] p-3 text-sm text-slate-100 outline-none"
+                                  />
+                                </div>
+
+                                <div className={`space-y-2 ${sectionTemplate === 'template-3' && hasSectionMedia ? 'xl:order-1' : ''}`}>
+                                  <span className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Upload Photo/Video</span>
+                                  <div className="relative">
+                                    {sectionMediaUrl ? (
+                                      <button
+                                        type="button"
+                                        onClick={(event) => {
+                                          event.preventDefault();
+                                          event.stopPropagation();
+                                          void removeTopicMedia(section, sectionIndex);
+                                        }}
+                                        className="absolute right-2 top-2 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full border border-white/25 bg-slate-950/85 text-slate-200 transition hover:border-rose-300/70 hover:text-rose-200"
+                                        title="Remove uploaded file"
+                                        aria-label="Remove uploaded file"
+                                      >
+                                        <X size={13} />
+                                      </button>
+                                    ) : null}
+                                    <label className={`flex cursor-pointer flex-col items-center justify-center gap-3 rounded-md border-2 border-dashed border-white/25 bg-slate-900/60 p-6 text-center hover:border-brand-400/70 hover:bg-slate-900/80 ${sectionTemplate === 'template-2' ? 'min-h-[220px]' : 'min-h-[280px]'}`}>
+                                      {sectionMediaUrl ? (
+                                        isVideoMediaUrl(sectionMediaUrl) ? (
+                                          <video src={sectionMediaUrl} controls className="max-h-[260px] w-full rounded-md object-contain" />
+                                        ) : (
+                                          <img src={sectionMediaUrl} alt={`${currentTopic.title} section ${sectionIndex + 1}`} className="max-h-[260px] w-full rounded-md object-contain" />
+                                        )
+                                      ) : (
+                                        <>
+                                          <Upload size={36} className="text-slate-300" />
+                                          <p className="text-lg font-semibold text-slate-200">UPLOAD PHOTO/VIDEO</p>
+                                          <p className="text-xs text-slate-400">PNG, JPG, WEBP, GIF, MP4, WEBM</p>
+                                        </>
+                                      )}
+                                      <input
+                                        type="file"
+                                        accept="image/*,video/*"
+                                        className="hidden"
+                                        onChange={(event) => {
+                                          const file = event.target.files?.[0];
+                                          if (!file) return;
+                                          void run(async () => {
+                                            await uploadTopicMedia(section, file, sectionIndex);
+                                          });
+                                          event.target.value = '';
+                                        }}
+                                      />
+                                    </label>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
                       <div><button onClick={() => void saveCurrentTopic()} className="rounded-full bg-brand-500 px-4 py-2 text-xs font-semibold text-slate-950 hover:bg-brand-400">Save Topic</button></div>
                     </div>
@@ -1228,17 +1668,171 @@ export function AdminModulesPage() {
 
       {showCreateModal ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm">
-          <form onSubmit={handleCreateModule} className="w-full max-w-2xl rounded-xl border border-white/10 bg-slate-900 p-5 shadow-2xl">
-            <div className="mb-4 flex items-start justify-between"><h3 className="text-xl font-bold text-white">Create Module</h3><button type="button" onClick={() => setShowCreateModal(false)} className="rounded-md border border-white/20 px-3 py-2 text-sm font-semibold text-slate-200">Close</button></div>
-            <div className="grid gap-3 md:grid-cols-2">
-              <input required value={createForm.title} onChange={(event) => setCreateForm((prev) => ({ ...prev, title: event.target.value }))} placeholder="Module title" className="rounded-md border border-white/20 bg-slate-950/70 px-3 py-2 text-sm text-slate-100 md:col-span-2" />
-              <select value={createForm.category} onChange={(event) => setCreateForm((prev) => ({ ...prev, category: event.target.value }))} className="rounded-md border border-white/20 bg-slate-950/70 px-3 py-2 text-sm text-slate-100">{MODULE_CATEGORIES.map((category) => <option key={category} value={category}>{category}</option>)}</select>
-              <input value={createForm.thumbnailUrl} onChange={(event) => setCreateForm((prev) => ({ ...prev, thumbnailUrl: event.target.value }))} placeholder="Thumbnail URL" className="rounded-md border border-white/20 bg-slate-950/70 px-3 py-2 text-sm text-slate-100" />
-              <textarea required value={createForm.description} onChange={(event) => setCreateForm((prev) => ({ ...prev, description: event.target.value }))} placeholder="Module description" className="h-24 rounded-md border border-white/20 bg-slate-950/70 px-3 py-2 text-sm text-slate-100 md:col-span-2" />
-              <select value={createForm.prerequisiteModuleId ?? ''} onChange={(event) => setCreateForm((prev) => ({ ...prev, prerequisiteModuleId: event.target.value ? Number(event.target.value) : null }))} className="rounded-md border border-white/20 bg-slate-950/70 px-3 py-2 text-sm text-slate-100"><option value="">No prerequisite</option>{modules.map((module) => <option key={module.id} value={module.id}>{module.title}</option>)}</select>
-              <label className="inline-flex items-center gap-2 rounded-md border border-white/15 bg-slate-950/60 px-3 py-2 text-sm text-slate-200"><input type="checkbox" checked={createForm.isActive} onChange={(event) => setCreateForm((prev) => ({ ...prev, isActive: event.target.checked }))} />Published</label>
-              <label className="inline-flex items-center gap-2 rounded-md border border-white/15 bg-slate-950/60 px-3 py-2 text-sm text-slate-200"><input type="checkbox" checked={createForm.isLocked} onChange={(event) => setCreateForm((prev) => ({ ...prev, isLocked: event.target.checked }))} />Locked</label>
-              <div className="md:col-span-2 flex justify-end"><button disabled={busy} className="rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white">{busy ? 'Creating...' : 'Create Module'}</button></div>
+          <form onSubmit={handleCreateModule} className="w-full max-w-5xl rounded-xl border border-white/10 bg-slate-900 p-5 shadow-2xl">
+            <div className="mb-4 flex items-start justify-between">
+              <h3 className="text-xl font-bold text-white">Create Module</h3>
+              <button
+                type="button"
+                onClick={() => setShowCreateModal(false)}
+                aria-label="Close create module"
+                className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/20 text-slate-200 transition hover:bg-white/10"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="grid gap-5 md:grid-cols-[340px_1fr]">
+              <article className="rounded-xl border border-white/10 bg-slate-950/40 p-4">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-brand-300">Live Preview</p>
+                <div className="mt-3 rounded-xl border border-white/10 bg-slate-900/70 p-4">
+                  <div className="mb-3 aspect-video w-full overflow-hidden rounded-md border border-white/10 bg-white/5">
+                    {createForm.thumbnailUrl ? (
+                      <img src={createForm.thumbnailUrl} alt={createForm.title || 'Module preview'} className="h-full w-full object-contain" />
+                    ) : (
+                      <div className="flex h-full items-center justify-center text-xs font-semibold uppercase tracking-wider text-slate-400">
+                        No Thumbnail
+                      </div>
+                    )}
+                  </div>
+
+                  <span className="rounded-full bg-white/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-slate-200">
+                    {createForm.category || 'Hardware'}
+                  </span>
+                  <h4 className="mt-3 text-lg font-bold text-white">{createForm.title || 'Untitled Module'}</h4>
+                  <p className="mt-2 text-sm text-slate-300">{createForm.description || 'Module description preview.'}</p>
+
+                  <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+                    <span className={`rounded-full px-2 py-0.5 ${createForm.isActive ? 'bg-emerald-500/15 text-emerald-300' : 'bg-slate-500/15 text-slate-300'}`}>
+                      {createForm.isActive ? 'Published' : 'Draft'}
+                    </span>
+                    <span className={`rounded-full px-2 py-0.5 ${createForm.isLocked ? 'bg-amber-500/15 text-amber-200' : 'bg-brand-500/15 text-brand-200'}`}>
+                      {createForm.isLocked ? 'Locked' : 'Unlocked'}
+                    </span>
+                  </div>
+                </div>
+              </article>
+
+              <div className="grid gap-4 rounded-xl border border-white/10 bg-slate-950/30 p-4 md:grid-cols-2">
+                <label htmlFor="create-module-title" className="space-y-1.5 md:col-span-2">
+                  <span className="block text-xs font-semibold uppercase tracking-[0.12em] text-slate-300">Module Title</span>
+                  <input
+                    id="create-module-title"
+                    required
+                    value={createForm.title}
+                    onChange={(event) => setCreateForm((prev) => ({ ...prev, title: event.target.value }))}
+                    placeholder="Enter module title"
+                    className="w-full rounded-lg border border-white/20 bg-slate-950/80 px-3.5 py-2.5 text-sm text-slate-100 placeholder:text-slate-500 transition focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-500/25"
+                  />
+                </label>
+
+                <label htmlFor="create-module-category" className="space-y-1.5 md:col-span-2">
+                  <span className="block text-xs font-semibold uppercase tracking-[0.12em] text-slate-300">Category</span>
+                  <select
+                    id="create-module-category"
+                    value={createForm.category}
+                    onChange={(event) => setCreateForm((prev) => ({ ...prev, category: event.target.value }))}
+                    className="w-full rounded-lg border border-white/20 bg-slate-950/80 px-3.5 py-2.5 text-sm text-slate-100 transition focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-500/25"
+                  >
+                    {MODULE_CATEGORIES.map((category) => (
+                      <option key={category} value={category}>
+                        {category}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <div className="space-y-2 md:col-span-2">
+                  <span className="block text-xs font-semibold uppercase tracking-[0.12em] text-slate-300">Thumbnail</span>
+                  <div className="flex flex-col gap-2 rounded-lg border border-white/20 bg-slate-950/65 p-3 sm:flex-row sm:items-center sm:justify-between">
+                    <p className="text-xs text-slate-300">Upload a thumbnail image for this module card preview.</p>
+                    <div className="flex items-center gap-2">
+                      <input ref={createThumbnailInputRef} type="file" accept="image/*" onChange={handleCreateThumbnailUpload} className="hidden" />
+                      <button
+                        type="button"
+                        onClick={() => createThumbnailInputRef.current?.click()}
+                        className="inline-flex items-center gap-1.5 rounded-md border border-white/20 bg-slate-900/70 px-3 py-1.5 text-xs font-semibold text-slate-100 transition hover:bg-slate-800"
+                      >
+                        <Upload size={14} />
+                        Upload Photo
+                      </button>
+                      {createForm.thumbnailUrl ? (
+                        <button
+                          type="button"
+                          onClick={() => setCreateForm((prev) => ({ ...prev, thumbnailUrl: '' }))}
+                          className="rounded-md border border-white/20 px-3 py-1.5 text-xs font-semibold text-slate-200 transition hover:bg-white/10"
+                        >
+                          Remove
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                  <label htmlFor="create-module-thumbnail-url" className="space-y-1.5">
+                    <span className="block text-xs font-semibold uppercase tracking-[0.1em] text-slate-400">Or Paste Image URL (Optional)</span>
+                    <input
+                      id="create-module-thumbnail-url"
+                      value={createForm.thumbnailUrl}
+                      onChange={(event) => setCreateForm((prev) => ({ ...prev, thumbnailUrl: event.target.value }))}
+                      placeholder="https://example.com/module-cover.png"
+                      className="w-full rounded-lg border border-white/20 bg-slate-950/80 px-3.5 py-2.5 text-sm text-slate-100 placeholder:text-slate-500 transition focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-500/25"
+                    />
+                  </label>
+                </div>
+
+                <label htmlFor="create-module-description" className="space-y-1.5 md:col-span-2">
+                  <span className="block text-xs font-semibold uppercase tracking-[0.12em] text-slate-300">Description</span>
+                  <textarea
+                    id="create-module-description"
+                    required
+                    value={createForm.description}
+                    onChange={(event) => setCreateForm((prev) => ({ ...prev, description: event.target.value }))}
+                    placeholder="Write a short description for this module"
+                    className="h-32 w-full rounded-lg border border-white/20 bg-slate-950/80 px-3.5 py-2.5 text-sm text-slate-100 placeholder:text-slate-500 transition focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-500/25"
+                  />
+                </label>
+
+                <div className="grid gap-3 md:col-span-2 md:grid-cols-2">
+                  <label htmlFor="create-module-publish" className="flex min-h-[92px] cursor-pointer items-center justify-between rounded-lg border border-white/15 bg-slate-950/60 px-4 py-3 transition hover:border-white/25">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-300">Publish Status</p>
+                      <p className="mt-1 text-sm font-semibold text-slate-100">{createForm.isActive ? 'Published' : 'Draft'}</p>
+                    </div>
+                    <span className="relative inline-flex h-6 w-11 items-center">
+                      <input
+                        id="create-module-publish"
+                        type="checkbox"
+                        checked={createForm.isActive}
+                        onChange={(event) => setCreateForm((prev) => ({ ...prev, isActive: event.target.checked }))}
+                        className="peer sr-only"
+                      />
+                      <span className="h-6 w-11 rounded-full bg-slate-600/80 transition peer-checked:bg-emerald-500/80" />
+                      <span className="pointer-events-none absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform peer-checked:translate-x-5" />
+                    </span>
+                  </label>
+
+                  <label htmlFor="create-module-lock" className="flex min-h-[92px] cursor-pointer items-center justify-between rounded-lg border border-white/15 bg-slate-950/60 px-4 py-3 transition hover:border-white/25">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-300">Access Mode</p>
+                      <p className="mt-1 text-sm font-semibold text-slate-100">{createForm.isLocked ? 'Locked' : 'Unlocked'}</p>
+                    </div>
+                    <span className="relative inline-flex h-6 w-11 items-center">
+                      <input
+                        id="create-module-lock"
+                        type="checkbox"
+                        checked={createForm.isLocked}
+                        onChange={(event) => setCreateForm((prev) => ({ ...prev, isLocked: event.target.checked }))}
+                        className="peer sr-only"
+                      />
+                      <span className="h-6 w-11 rounded-full bg-slate-600/80 transition peer-checked:bg-amber-500/80" />
+                      <span className="pointer-events-none absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform peer-checked:translate-x-5" />
+                    </span>
+                  </label>
+                </div>
+                <div className="flex justify-end md:col-span-2">
+                  <button disabled={busy} className="rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white">
+                    {busy ? 'Creating...' : 'Create Module'}
+                  </button>
+                </div>
+              </div>
             </div>
           </form>
         </div>
@@ -1274,7 +1868,7 @@ export function AdminModulesPage() {
                   </div>
 
                   <span className="rounded-full bg-white/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-slate-200">
-                    {editForm.category || 'General'}
+                    {editForm.category || 'Hardware'}
                   </span>
                   <h4 className="mt-3 text-lg font-bold text-white">{editForm.title || 'Untitled Module'}</h4>
                   <p className="mt-2 text-sm text-slate-300">{editForm.description || 'Module description preview.'}</p>
@@ -1288,14 +1882,6 @@ export function AdminModulesPage() {
                     </span>
                   </div>
 
-                  <p className="mt-3 text-xs text-slate-400">
-                    Prerequisite:{' '}
-                    <span className="text-slate-200">
-                      {editForm.prerequisiteModuleId
-                        ? modules.find((module) => module.id === editForm.prerequisiteModuleId)?.title ?? 'Selected module'
-                        : 'None'}
-                    </span>
-                  </p>
                 </div>
               </article>
 
@@ -1312,7 +1898,7 @@ export function AdminModulesPage() {
                   />
                 </label>
 
-                <label htmlFor="edit-module-category" className="space-y-1.5">
+                <label htmlFor="edit-module-category" className="space-y-1.5 md:col-span-2">
                   <span className="block text-xs font-semibold uppercase tracking-[0.12em] text-slate-300">Category</span>
                   <select
                     id="edit-module-category"
@@ -1325,25 +1911,6 @@ export function AdminModulesPage() {
                         {category}
                       </option>
                     ))}
-                  </select>
-                </label>
-
-                <label htmlFor="edit-module-prerequisite" className="space-y-1.5">
-                  <span className="block text-xs font-semibold uppercase tracking-[0.12em] text-slate-300">Prerequisite Module</span>
-                  <select
-                    id="edit-module-prerequisite"
-                    value={editForm.prerequisiteModuleId ?? ''}
-                    onChange={(event) => setEditForm((prev) => ({ ...prev, prerequisiteModuleId: event.target.value ? Number(event.target.value) : null }))}
-                    className="w-full rounded-lg border border-white/20 bg-slate-950/80 px-3.5 py-2.5 text-sm text-slate-100 transition focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-500/25"
-                  >
-                    <option value="">No prerequisite</option>
-                    {modules
-                      .filter((module) => module.id !== editModuleId)
-                      .map((module) => (
-                        <option key={module.id} value={module.id}>
-                          {module.title}
-                        </option>
-                      ))}
                   </select>
                 </label>
 
@@ -1489,29 +2056,75 @@ export function AdminModulesPage() {
                   </div>
                 ) : null}
                 {previewSelection.view === 'topic' && previewCurrentTopic ? (
-                  <div className="space-y-3 rounded-xl border border-white/10 bg-slate-900/70 p-4">
+                  <div className="space-y-4 rounded-xl border border-white/10 bg-slate-900/70 p-4">
                     <h4 className="text-xl font-bold text-white">{previewCurrentTopic.title}</h4>
                     {previewCurrentTopic.summary ? <p className="text-sm text-slate-300">{previewCurrentTopic.summary}</p> : null}
-                    <div className="grid gap-3 xl:grid-cols-[1fr_320px]">
-                      <div className="rounded-lg border border-white/10 bg-slate-950/60 p-3 text-sm text-slate-200">
-                        {previewTopicPrimaryContent?.body_text ? (
-                          <div dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(previewTopicPrimaryContent.body_text) }} />
-                        ) : (
-                          <p className="text-sm text-slate-400">No topic content yet.</p>
-                        )}
-                      </div>
-                      <div className="rounded-lg border border-white/10 bg-slate-950/60 p-3">
-                        {previewTopicPrimaryContent?.content_url ? (
-                          isVideoMediaUrl(previewTopicPrimaryContent.content_url) ? (
-                            <video src={previewTopicPrimaryContent.content_url} controls className="max-h-[260px] w-full rounded-md object-contain" />
+                    {previewTopicSections.length === 0 ? <p className="text-sm text-slate-400">No topic content yet.</p> : null}
+                    {previewTopicSections.map((section, sectionIndex) => {
+                      const sectionTemplate = getTopicTemplateFromBlock(section);
+                      const sectionHtml = sanitizeRichHtml(section.body_text ?? '');
+                      const sectionMediaUrl = section.content_url ?? '';
+                      const hasSectionMedia = Boolean(sectionMediaUrl);
+
+                      return (
+                        <div key={section.id} className="space-y-3">
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400">Section {sectionIndex + 1}</p>
+                          {sectionTemplate === 'template-2' ? (
+                            <div className="space-y-3">
+                              <div className="rounded-lg border border-white/10 bg-slate-950/60 p-3 text-sm text-slate-200">
+                                {sectionHtml ? (
+                                  <div dangerouslySetInnerHTML={{ __html: sectionHtml }} />
+                                ) : (
+                                  <p className="text-sm text-slate-400">No text content.</p>
+                                )}
+                              </div>
+                              {hasSectionMedia ? (
+                                <div className="rounded-lg border border-white/10 bg-slate-950/60 p-3">
+                                  {isVideoMediaUrl(sectionMediaUrl) ? (
+                                    <video src={sectionMediaUrl} controls className="max-h-[260px] w-full rounded-md object-contain" />
+                                  ) : (
+                                    <img src={sectionMediaUrl} alt={`${previewCurrentTopic.title} section ${sectionIndex + 1}`} className="max-h-[260px] w-full rounded-md object-contain" />
+                                  )}
+                                </div>
+                              ) : null}
+                            </div>
                           ) : (
-                            <img src={previewTopicPrimaryContent.content_url} alt={previewCurrentTopic.title} className="max-h-[260px] w-full rounded-md object-contain" />
-                          )
-                        ) : (
-                          <p className="text-sm text-slate-400">No media uploaded.</p>
-                        )}
-                      </div>
-                    </div>
+                            hasSectionMedia ? (
+                              <div
+                                className={`grid gap-3 xl:items-start ${
+                                  sectionTemplate === 'template-3'
+                                    ? 'xl:grid-cols-[320px_minmax(0,1fr)]'
+                                    : 'xl:grid-cols-[minmax(0,1fr)_320px]'
+                                }`}
+                              >
+                                <div className={`rounded-lg border border-white/10 bg-slate-950/60 p-3 text-sm text-slate-200 ${sectionTemplate === 'template-3' ? 'xl:order-2' : ''}`}>
+                                  {sectionHtml ? (
+                                    <div dangerouslySetInnerHTML={{ __html: sectionHtml }} />
+                                  ) : (
+                                    <p className="text-sm text-slate-400">No text content.</p>
+                                  )}
+                                </div>
+                                <div className={`rounded-lg border border-white/10 bg-slate-950/60 p-3 ${sectionTemplate === 'template-3' ? 'xl:order-1' : ''}`}>
+                                  {isVideoMediaUrl(sectionMediaUrl) ? (
+                                    <video src={sectionMediaUrl} controls className="max-h-[260px] w-full rounded-md object-contain" />
+                                  ) : (
+                                    <img src={sectionMediaUrl} alt={`${previewCurrentTopic.title} section ${sectionIndex + 1}`} className="max-h-[260px] w-full rounded-md object-contain" />
+                                  )}
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="rounded-lg border border-white/10 bg-slate-950/60 p-3 text-sm text-slate-200">
+                                {sectionHtml ? (
+                                  <div dangerouslySetInnerHTML={{ __html: sectionHtml }} />
+                                ) : (
+                                  <p className="text-sm text-slate-400">No text content.</p>
+                                )}
+                              </div>
+                            )
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 ) : null}
                 {(previewSelection.view === 'preTest' || previewSelection.view === 'postTest' || previewSelection.view === 'finalExam') && previewCurrentQuiz ? <div className="space-y-3 rounded-xl border border-white/10 bg-slate-900/70 p-4"><h4 className="text-xl font-bold text-white">{previewCurrentQuiz.title}</h4><div className="grid gap-2 text-xs text-slate-300 md:grid-cols-3"><p>Passing: {previewCurrentQuiz.passing_score}%</p><p>Time: {previewCurrentQuiz.time_limit_minutes} min</p><p>Attempts: {previewCurrentQuiz.attempt_limit}</p></div>{(questionsByQuiz.get(previewCurrentQuiz.id) ?? []).map((question, questionIndex) => <div key={question.id} className="rounded-lg border border-white/10 bg-slate-950/60 p-3"><p className="text-xs font-semibold uppercase tracking-[0.13em] text-slate-400">Question {questionIndex + 1}</p><p className="mt-1 text-sm font-semibold text-white">{question.prompt}</p><div className="mt-2 space-y-1">{(answersByQuestion.get(question.id) ?? []).map((answer) => <p key={answer.id} className="rounded-md border border-white/10 px-2 py-1 text-sm text-slate-300">{answer.answer_text}</p>)}</div></div>)}</div> : null}

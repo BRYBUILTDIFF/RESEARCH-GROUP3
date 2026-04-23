@@ -23,7 +23,6 @@ interface ImportPreviewRow {
   rowNumber: number;
   fullName: string;
   email: string;
-  password: string;
   isActive: boolean;
   role: 'user';
   errors: string[];
@@ -31,13 +30,12 @@ interface ImportPreviewRow {
 
 type SpreadsheetRow = Record<string, unknown>;
 
-const IMPORT_HEADERS = ['fullName', 'email', 'password', 'isActive', 'role'] as const;
+const IMPORT_HEADERS = ['fullName', 'email', 'isActive', 'role'] as const;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
 const TEMPLATE_ROWS: Array<Record<(typeof IMPORT_HEADERS)[number], string>> = [
   {
     fullName: 'Juan Dela Cruz',
     email: 'juan.delacruz@example.com',
-    password: 'TempPass123',
     isActive: 'TRUE',
     role: 'user',
   },
@@ -69,7 +67,6 @@ export function AdminUsersPage() {
   const [newTrainee, setNewTrainee] = useState({
     fullName: '',
     email: '',
-    password: '',
     isActive: true,
   });
 
@@ -128,11 +125,10 @@ export function AdminUsersPage() {
       await createUser({
         fullName: newTrainee.fullName,
         email: newTrainee.email,
-        password: newTrainee.password,
         role: 'user',
         isActive: newTrainee.isActive,
       });
-      setNewTrainee({ fullName: '', email: '', password: '', isActive: true });
+      setNewTrainee({ fullName: '', email: '', isActive: true });
       setIsCreateModalOpen(false);
     });
   };
@@ -218,7 +214,6 @@ export function AdminUsersPage() {
     const parsedRows = rawRows.map((rawRow, index) => {
       const fullName = toText(getCellByAlias(rawRow, ['fullname', 'name']));
       const email = toText(getCellByAlias(rawRow, ['email']));
-      const password = toText(getCellByAlias(rawRow, ['password']));
       const roleValue = toText(getCellByAlias(rawRow, ['role'])).toLowerCase();
       const isActiveRaw = getCellByAlias(rawRow, ['isactive', 'active', 'status']);
       const parsedIsActive = parseBooleanLike(isActiveRaw);
@@ -227,8 +222,6 @@ export function AdminUsersPage() {
       if (!fullName) errors.push('fullName is required');
       if (!email) errors.push('email is required');
       if (email && !EMAIL_PATTERN.test(email)) errors.push('email format is invalid');
-      if (!password) errors.push('password is required');
-      if (password && password.length < 6) errors.push('password must be at least 6 characters');
       if (toText(isActiveRaw) && parsedIsActive === null) errors.push('isActive must be TRUE/FALSE, YES/NO, 1/0, or ACTIVE/INACTIVE');
       if (roleValue && roleValue !== 'user') errors.push('role must be "user" for trainee import');
 
@@ -241,7 +234,6 @@ export function AdminUsersPage() {
         rowNumber: index + 2,
         fullName,
         email,
-        password,
         isActive: parsedIsActive ?? true,
         role: 'user' as const,
         errors,
@@ -305,7 +297,6 @@ export function AdminUsersPage() {
     const rows = users.map((user) => ({
       fullName: user.full_name,
       email: user.email,
-      password: 'TempPass123',
       isActive: user.is_active ? 'TRUE' : 'FALSE',
       role: 'user',
     }));
@@ -382,7 +373,6 @@ export function AdminUsersPage() {
         await createUser({
           fullName: row.fullName,
           email: row.email,
-          password: row.password,
           role: 'user',
           isActive: row.isActive,
         });
@@ -820,7 +810,7 @@ export function AdminUsersPage() {
                     <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-brand-300">Bulk Upload</p>
                     <h3 className="text-xl font-bold text-white">Import Trainees</h3>
                     <p className="text-sm text-slate-300">
-                      Required columns: <span className="font-semibold">fullName, email, password</span>. Optional:{' '}
+                      Required columns: <span className="font-semibold">fullName, email</span>. Optional:{' '}
                       <span className="font-semibold">isActive, role</span> (role must be user).
                     </p>
                   </div>
@@ -876,16 +866,15 @@ export function AdminUsersPage() {
                       </p>
                     </div>
                     <div className="max-h-[48vh] overflow-auto">
-                      <table className="w-full min-w-[980px] table-fixed text-sm">
+                      <table className="w-full min-w-[900px] table-fixed text-sm">
                         <thead className="sticky top-0 bg-slate-900/95">
                           <tr className="border-b border-white/10 text-xs uppercase tracking-wider text-slate-300">
                             <th className="w-[7%] px-3 py-2 text-left">Row</th>
-                            <th className="w-[20%] px-3 py-2 text-left">Full Name</th>
-                            <th className="w-[21%] px-3 py-2 text-left">Email</th>
-                            <th className="w-[16%] px-3 py-2 text-left">Password</th>
-                            <th className="w-[10%] px-3 py-2 text-left">isActive</th>
-                            <th className="w-[9%] px-3 py-2 text-left">Role</th>
-                            <th className="w-[17%] px-3 py-2 text-left">Validation</th>
+                            <th className="w-[23%] px-3 py-2 text-left">Full Name</th>
+                            <th className="w-[25%] px-3 py-2 text-left">Email</th>
+                            <th className="w-[12%] px-3 py-2 text-left">isActive</th>
+                            <th className="w-[10%] px-3 py-2 text-left">Role</th>
+                            <th className="w-[23%] px-3 py-2 text-left">Validation</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -897,7 +886,6 @@ export function AdminUsersPage() {
                               <td className="px-3 py-2 text-slate-300">{row.rowNumber}</td>
                               <td className="px-3 py-2 text-slate-100">{row.fullName || '-'}</td>
                               <td className="px-3 py-2 text-slate-100">{row.email || '-'}</td>
-                              <td className="px-3 py-2 text-slate-100">{row.password ? '******' : '-'}</td>
                               <td className="px-3 py-2 text-slate-100">{row.isActive ? 'TRUE' : 'FALSE'}</td>
                               <td className="px-3 py-2 text-slate-100">{row.role}</td>
                               <td className={`px-3 py-2 text-xs ${row.errors.length ? 'text-rose-200' : 'text-emerald-200'}`}>
@@ -981,15 +969,10 @@ export function AdminUsersPage() {
                     className="rounded-md border border-white/20 bg-slate-950/70 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500"
                     placeholder="Email"
                   />
-                  <input
-                    required
-                    minLength={6}
-                    type="password"
-                    value={newTrainee.password}
-                    onChange={(event) => setNewTrainee((previous) => ({ ...previous, password: event.target.value }))}
-                    className="rounded-md border border-white/20 bg-slate-950/70 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 md:col-span-2"
-                    placeholder="Temporary password"
-                  />
+                  <p className="rounded-md border border-brand-400/30 bg-brand-500/10 px-3 py-2 text-xs text-brand-100 md:col-span-2">
+                    Default password for new trainees is <span className="font-semibold">password123</span>. Users must
+                    change it on first login.
+                  </p>
                   <label className="inline-flex items-center gap-2 text-sm text-slate-300 md:col-span-2">
                     <input
                       type="checkbox"

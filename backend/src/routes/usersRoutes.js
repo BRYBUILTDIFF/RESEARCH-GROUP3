@@ -6,6 +6,7 @@ import {
   getUserById,
   getUserLogs,
   listUsers,
+  updateMyPassword,
   updateMyProfile,
   updateUser,
 } from '../controllers/usersController.js';
@@ -15,6 +16,7 @@ const router = Router();
 
 router.get('/me', getMyProfile);
 router.patch('/me', updateMyProfile);
+router.patch('/me/password', updateMyPassword);
 
 router.get('/', requireRole('admin'), listUsers);
 router.post('/', requireRole('admin'), createUser);

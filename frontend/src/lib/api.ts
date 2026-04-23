@@ -62,6 +62,18 @@ export async function login(email: string, password: string): Promise<LoginRespo
   });
 }
 
+export interface UserProfileResponse {
+  id: number;
+  email: string;
+  full_name: string;
+  role: 'admin' | 'user';
+  is_active: boolean;
+  must_change_password: boolean;
+  password_changed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export async function getModules(): Promise<ModuleSummary[]> {
   const data = await apiRequest<{ modules: ModuleSummary[] }>('/api/modules');
   return data.modules;
@@ -171,6 +183,7 @@ export async function createLessonContent(payload: {
   bodyText?: string;
   contentUrl?: string;
   simulationKey?: string;
+  metadata?: Record<string, unknown>;
   isRequired?: boolean;
   sortOrder?: number;
 }): Promise<LessonContentBlock> {
@@ -190,6 +203,7 @@ export async function updateLessonContent(
     bodyText: string;
     contentUrl: string;
     simulationKey: string;
+    metadata: Record<string, unknown>;
     isRequired: boolean;
     sortOrder: number;
   }>
@@ -459,6 +473,8 @@ export async function getUsers(): Promise<
     full_name: string;
     role: 'admin' | 'user';
     is_active: boolean;
+    must_change_password?: boolean;
+    password_changed_at?: string | null;
   }>
 > {
   const data = await apiRequest<{
@@ -468,6 +484,8 @@ export async function getUsers(): Promise<
       full_name: string;
       role: 'admin' | 'user';
       is_active: boolean;
+      must_change_password?: boolean;
+      password_changed_at?: string | null;
     }>;
   }>('/api/users');
   return data.users;
@@ -479,6 +497,8 @@ export async function getUserById(id: number): Promise<{
   full_name: string;
   role: 'admin' | 'user';
   is_active: boolean;
+  must_change_password?: boolean;
+  password_changed_at?: string | null;
   created_at: string;
   updated_at: string;
 }> {
@@ -489,6 +509,8 @@ export async function getUserById(id: number): Promise<{
       full_name: string;
       role: 'admin' | 'user';
       is_active: boolean;
+      must_change_password?: boolean;
+      password_changed_at?: string | null;
       created_at: string;
       updated_at: string;
     };
@@ -499,7 +521,6 @@ export async function getUserById(id: number): Promise<{
 export async function createUser(payload: {
   fullName: string;
   email: string;
-  password: string;
   role?: 'admin' | 'user';
   isActive?: boolean;
 }) {
@@ -511,6 +532,7 @@ export async function createUser(payload: {
       role: 'admin' | 'user';
       is_active: boolean;
     };
+    defaultPassword?: string;
   }>('/api/users', {
     method: 'POST',
     body: JSON.stringify(payload),
@@ -544,4 +566,17 @@ export async function deleteUser(id: number) {
   await apiRequest<{}>(`/api/users/${id}`, {
     method: 'DELETE',
   });
+}
+
+export async function getMyProfile(): Promise<UserProfileResponse> {
+  const data = await apiRequest<{ user: UserProfileResponse }>('/api/users/me');
+  return data.user;
+}
+
+export async function updateMyPassword(currentPassword: string, newPassword: string): Promise<UserProfileResponse> {
+  const data = await apiRequest<{ user: UserProfileResponse }>('/api/users/me/password', {
+    method: 'PATCH',
+    body: JSON.stringify({ currentPassword, newPassword }),
+  });
+  return data.user;
 }

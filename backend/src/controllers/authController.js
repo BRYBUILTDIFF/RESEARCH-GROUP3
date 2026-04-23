@@ -11,11 +11,14 @@ function signAccessToken(user) {
 }
 
 function toAuthUser(user) {
+  const hasChangedPassword = Boolean(user.password_changed_at);
   return {
     id: user.id,
     email: user.email,
     role: user.role,
     fullName: user.full_name,
+    mustChangePassword: Boolean(user.must_change_password),
+    passwordChanged: hasChangedPassword && !Boolean(user.must_change_password),
   };
 }
 
@@ -36,16 +39,18 @@ export const register = asyncHandler(async (req, res) => {
   const hashed = await bcrypt.hash(password, 10);
   const inserted = await pool.query(
     `
-      INSERT INTO users (email, full_name, role, role_id, password_hash, is_active)
+      INSERT INTO users (email, full_name, role, role_id, password_hash, is_active, must_change_password, password_changed_at)
       VALUES (
         $1,
         $2,
         'user',
         (SELECT id FROM roles WHERE name = 'user' LIMIT 1),
         $3,
-        TRUE
+        TRUE,
+        FALSE,
+        NOW()
       )
-      RETURNING id, email, full_name, role;
+      RETURNING id, email, full_name, role, must_change_password, password_changed_at;
     `,
     [email, fullName, hashed]
   );
@@ -75,7 +80,7 @@ export const login = asyncHandler(async (req, res) => {
 
   const result = await pool.query(
     `
-      SELECT id, email, full_name, role, is_active, password_hash
+      SELECT id, email, full_name, role, is_active, password_hash, must_change_password, password_changed_at
       FROM users
       WHERE email = $1
       LIMIT 1;

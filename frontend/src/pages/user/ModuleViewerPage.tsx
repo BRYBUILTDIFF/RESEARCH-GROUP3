@@ -3,10 +3,8 @@ import {
   Award,
   Check,
   CheckCircle2,
-  ChevronDown,
   ChevronLeft,
   ChevronRight,
-  ChevronUp,
   CircleDotDashed,
   CirclePlay,
   ClipboardList,
@@ -17,7 +15,7 @@ import {
   PanelLeftOpen,
   Timer,
 } from 'lucide-react';
-import { useParams } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 import {
   completeLesson,
   enroll,
@@ -58,6 +56,25 @@ function isVideoMediaUrl(url: string | null | undefined) {
   return /^(data:video\/|https?:\/\/.*\.(mp4|webm|ogg|mov)(\?.*)?$)/i.test(url);
 }
 
+type TopicLayoutTemplate = 'template-1' | 'template-2' | 'template-3';
+
+function isTopicLayoutTemplate(value: unknown): value is TopicLayoutTemplate {
+  return value === 'template-1' || value === 'template-2' || value === 'template-3';
+}
+
+function readContentMetadata(block: LessonContentBlock | null | undefined): Record<string, unknown> {
+  if (!block || !block.metadata || typeof block.metadata !== 'object' || Array.isArray(block.metadata)) {
+    return {};
+  }
+  return block.metadata;
+}
+
+function getTopicTemplateFromBlock(block: LessonContentBlock | null | undefined): TopicLayoutTemplate {
+  const template = readContentMetadata(block).template;
+  if (isTopicLayoutTemplate(template)) return template;
+  return 'template-1';
+}
+
 type AssessmentStage = 'pre' | 'post' | 'final';
 
 type SequenceItem =
@@ -69,20 +86,26 @@ type SequenceItem =
     }
   | {
       key: string;
-      type: 'topic';
-      lesson: LessonSummary;
-      topic: TopicSummary;
-      topicIndex: number;
-      topicCount: number;
-      unlocked: boolean;
-    }
-  | {
-      key: string;
       type: 'assessment';
       quiz: QuizSummary;
       stage: AssessmentStage;
       lesson: LessonSummary | null;
       unlocked: boolean;
+    };
+
+type LessonViewStep =
+  | {
+      key: string;
+      kind: 'overview';
+      title: string;
+      html: string;
+      mediaUrl: string | null;
+    }
+  | {
+      key: string;
+      kind: 'topic';
+      topic: TopicSummary;
+      sections: LessonContentBlock[];
     };
 
 const isPreTest = (quiz: QuizSummary) =>
@@ -118,13 +141,13 @@ const assessmentViewMeta: Record<AssessmentStage, {
     cta: 'Start assessment',
   },
   final: {
-    label: 'Final Exam',
+    label: 'Simulation Testing',
     chipClass: 'border-amber-400/50 bg-amber-500/15 text-amber-200',
     cardClass: 'border-amber-400/30 bg-amber-950/20',
     buttonClass: 'bg-amber-600 hover:bg-amber-500',
     icon: Award,
-    description: 'This final assessment evaluates full-module mastery.',
-    cta: 'Start final exam',
+    description: 'This simulation testing evaluates full-module mastery.',
+    cta: 'Start simulation',
   },
 };
 
@@ -150,11 +173,11 @@ export function ModuleViewerPage() {
   const [lessonContentByLessonId, setLessonContentByLessonId] = useState<Record<number, LessonContentBlock[]>>({});
   const [contentByTopicId, setContentByTopicId] = useState<Record<number, LessonContentBlock[]>>({});
   const [selectedLessonId, setSelectedLessonId] = useState<number | null>(null);
-  const [selectedTopicId, setSelectedTopicId] = useState<number | null>(null);
   const [selectedAssessmentId, setSelectedAssessmentId] = useState<number | null>(null);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
-  const [expandedLessons, setExpandedLessons] = useState<Record<number, boolean>>({});
-  const [openTopicIdByLessonId, setOpenTopicIdByLessonId] = useState<Record<number, number | null>>({});
+  const [readProgressByLessonId, setReadProgressByLessonId] = useState<Record<number, number>>({});
+  const [activeLessonStepIndexByLessonId, setActiveLessonStepIndexByLessonId] = useState<Record<number, number>>({});
+  const [viewedStepKeysByLessonId, setViewedStepKeysByLessonId] = useState<Record<number, Record<string, true>>>({});
   const [quizPreviewByQuizId, setQuizPreviewByQuizId] = useState<Record<number, QuizQuestion[]>>({});
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(true);
@@ -171,6 +194,8 @@ export function ModuleViewerPage() {
   const [isResultProcessing, setIsResultProcessing] = useState(false);
   const [quizTerminalLogs, setQuizTerminalLogs] = useState<string[]>([]);
   const terminalLogBoxRef = useRef<HTMLDivElement | null>(null);
+  const contentScrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const completeInFlightLessonIdsRef = useRef<Record<number, true>>({});
 
   const appendTerminalLog = (message: string) => {
     setQuizTerminalLogs((previous) => [...previous, `> ${message}`]);
@@ -247,23 +272,26 @@ export function ModuleViewerPage() {
       const defaultLessonId = orderedLessons.find((lesson) => !lesson.completed)?.id ?? orderedLessons[0]?.id ?? null;
       const nextLessonId =
         selectedLessonId && orderedLessons.some((lesson) => lesson.id === selectedLessonId) ? selectedLessonId : defaultLessonId;
-
-      const nextTopicsForLesson = nextLessonId ? nextTopicsByLessonId[nextLessonId] ?? [] : [];
-      const nextTopicId =
-        selectedTopicId && nextTopicsForLesson.some((topic) => topic.id === selectedTopicId) ? selectedTopicId : null;
+      const lessonOrderLookup = new Map<number, number>();
+      orderedLessons.forEach((lesson, index) => {
+        lessonOrderLookup.set(lesson.id, index);
+      });
+      const defaultPreTest =
+        [...quizzesByModule]
+          .filter(isPreTest)
+          .sort((a, b) => {
+            const orderA = a.lesson_id !== null ? lessonOrderLookup.get(a.lesson_id) ?? Number.MAX_SAFE_INTEGER : -1;
+            const orderB = b.lesson_id !== null ? lessonOrderLookup.get(b.lesson_id) ?? Number.MAX_SAFE_INTEGER : -1;
+            if (orderA !== orderB) return orderA - orderB;
+            return a.id - b.id;
+          })[0] ?? null;
+      const nextAssessmentId =
+        selectedAssessmentId && quizzesByModule.some((quiz) => quiz.id === selectedAssessmentId)
+          ? selectedAssessmentId
+          : defaultPreTest?.id ?? null;
 
       setSelectedLessonId(nextLessonId);
-      setSelectedTopicId(nextTopicId);
-      setExpandedLessons((previous) => (nextLessonId ? { ...previous, [nextLessonId]: true } : previous));
-      setOpenTopicIdByLessonId((previous) => {
-        if (!nextLessonId) return previous;
-        if (previous[nextLessonId] !== undefined) return previous;
-        return { ...previous, [nextLessonId]: nextTopicsForLesson[0]?.id ?? null };
-      });
-
-      if (selectedAssessmentId && !quizzesByModule.some((quiz) => quiz.id === selectedAssessmentId)) {
-        setSelectedAssessmentId(null);
-      }
+      setSelectedAssessmentId(nextAssessmentId);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : 'Failed to load module viewer.');
     } finally {
@@ -303,25 +331,12 @@ export function ModuleViewerPage() {
 
   const selectedLesson = lessons.find((lesson) => lesson.id === selectedLessonId) ?? null;
   const topicsForSelectedLesson = selectedLesson ? topicsByLessonId[selectedLesson.id] ?? [] : [];
-  const selectedTopic =
-    selectedTopicId && topicsForSelectedLesson.some((topic) => topic.id === selectedTopicId)
-      ? topicsForSelectedLesson.find((topic) => topic.id === selectedTopicId) ?? null
-      : null;
   const selectedLessonContent = selectedLesson ? lessonContentByLessonId[selectedLesson.id] ?? [] : [];
-  const selectedTopicContent = selectedTopic ? contentByTopicId[selectedTopic.id] ?? [] : [];
+  const selectedLessonTopicGroups = topicsForSelectedLesson.map((topic) => ({
+    topic,
+    sections: contentByTopicId[topic.id] ?? [],
+  }));
   const allLessonsCompleted = lessons.length > 0 && lessons.every((lesson) => lesson.completed);
-
-  useEffect(() => {
-    if (!selectedLesson) return;
-    const topics = topicsByLessonId[selectedLesson.id] ?? [];
-    setOpenTopicIdByLessonId((previous) => {
-      if (previous[selectedLesson.id] !== undefined) return previous;
-      return {
-        ...previous,
-        [selectedLesson.id]: topics[0]?.id ?? null,
-      };
-    });
-  }, [selectedLesson, topicsByLessonId]);
 
   const passedQuizIds = useMemo(() => {
     const passed = new Set<number>();
@@ -354,7 +369,7 @@ export function ModuleViewerPage() {
 
   const preTests = useMemo(() => {
     return quizzes
-      .filter((quiz) => quiz.quiz_type === 'lesson_quiz' && quiz.stage === 'pre_test')
+      .filter(isPreTest)
       .sort((a, b) => {
         const orderA = a.lesson_id !== null ? lessonOrderById.get(a.lesson_id) ?? Number.MAX_SAFE_INTEGER : -1;
         const orderB = b.lesson_id !== null ? lessonOrderById.get(b.lesson_id) ?? Number.MAX_SAFE_INTEGER : -1;
@@ -463,6 +478,8 @@ export function ModuleViewerPage() {
   const selectedAssessmentLatestResult =
     selectedAssessmentSessionResult ??
     (selectedAssessment ? (latestResultByQuizId.get(selectedAssessment.id) ?? null) : null);
+  const selectedAssessmentStage = selectedAssessment ? getAssessmentStage(selectedAssessment) : null;
+  const isSimulationAssessment = selectedAssessmentStage === 'final';
 
   const sequenceItems = useMemo(() => {
     const items: SequenceItem[] = [];
@@ -480,25 +497,12 @@ export function ModuleViewerPage() {
 
     lessons.forEach((lesson) => {
       const lessonUnlocked = unlockedLessonIds.has(lesson.id) || lesson.completed;
-      const topics = topicsByLessonId[lesson.id] ?? [];
 
       items.push({
         key: `lesson-${lesson.id}`,
         type: 'lesson',
         lesson,
         unlocked: lessonUnlocked,
-      });
-
-      topics.forEach((topic, index) => {
-        items.push({
-          key: `topic-${topic.id}`,
-          type: 'topic',
-          lesson,
-          topic,
-          topicIndex: index + 1,
-          topicCount: topics.length,
-          unlocked: lessonUnlocked,
-        });
       });
 
       const postTest = postTestByLessonId.get(lesson.id);
@@ -533,15 +537,12 @@ export function ModuleViewerPage() {
     lessons,
     postTestByLessonId,
     primaryPreTest,
-    topicsByLessonId,
     unlockedLessonIds,
   ]);
 
   const currentSequenceKey = selectedAssessment
     ? `assessment-${selectedAssessment.id}`
-    : selectedTopic
-      ? `topic-${selectedTopic.id}`
-      : selectedLesson
+    : selectedLesson
         ? `lesson-${selectedLesson.id}`
         : null;
 
@@ -560,28 +561,28 @@ export function ModuleViewerPage() {
     if (currentSequenceItem.type === 'lesson') {
       return `Lesson ${currentSequenceItem.lesson.sequence_no} of ${lessons.length}`;
     }
-    if (currentSequenceItem.type === 'topic') {
-      return `Topic ${currentSequenceItem.topicIndex} of ${currentSequenceItem.topicCount}`;
-    }
     if (currentSequenceItem.stage === 'pre') return 'Pre-Test';
     if (currentSequenceItem.stage === 'post') {
       return currentSequenceItem.lesson
         ? `Post-Test for Lesson ${currentSequenceItem.lesson.sequence_no}`
         : 'Post-Test';
     }
-    return 'Final Exam';
+    return 'Simulation Testing';
   })();
 
   const handleCompleteLesson = async (lessonIdValue: number) => {
-    if (!enrollment) return;
+    if (!enrollment || completeInFlightLessonIdsRef.current[lessonIdValue]) return;
+    completeInFlightLessonIdsRef.current[lessonIdValue] = true;
     setIsMutating(true);
     setError('');
     try {
       await completeLesson(enrollment.id, lessonIdValue);
+      setReadProgressByLessonId((previous) => ({ ...previous, [lessonIdValue]: 100 }));
       await reload();
     } catch (updateError) {
       setError(updateError instanceof Error ? updateError.message : 'Failed to complete lesson.');
     } finally {
+      delete completeInFlightLessonIdsRef.current[lessonIdValue];
       setIsMutating(false);
     }
   };
@@ -701,34 +702,15 @@ export function ModuleViewerPage() {
     }
   };
 
-  const toggleLessonExpanded = (lessonIdValue: number) => {
-    setExpandedLessons((previous) => ({ ...previous, [lessonIdValue]: !previous[lessonIdValue] }));
-  };
-
   const selectLesson = (lesson: LessonSummary) => {
     const lessonUnlocked = unlockedLessonIds.has(lesson.id) || lesson.completed;
     if (!lessonUnlocked || isQuizOngoing) return;
-    setSelectedLessonId(lesson.id);
-    setSelectedTopicId(null);
-    setSelectedAssessmentId(null);
-    setExpandedLessons((previous) => ({ ...previous, [lesson.id]: true }));
-    setOpenTopicIdByLessonId((previous) => {
-      if (previous[lesson.id] !== undefined) return previous;
-      const topics = topicsByLessonId[lesson.id] ?? [];
-      return { ...previous, [lesson.id]: topics[0]?.id ?? null };
+    setActiveLessonStepIndexByLessonId((previous) => {
+      if (typeof previous[lesson.id] === 'number') return previous;
+      return { ...previous, [lesson.id]: 0 };
     });
-    resetQuizSession();
-  };
-
-  const selectTopic = (lesson: LessonSummary, topic: TopicSummary) => {
-    const lessonUnlocked = unlockedLessonIds.has(lesson.id) || lesson.completed;
-    if (!lessonUnlocked || isQuizOngoing) return;
-
     setSelectedLessonId(lesson.id);
-    setSelectedTopicId(topic.id);
     setSelectedAssessmentId(null);
-    setExpandedLessons((previous) => ({ ...previous, [lesson.id]: true }));
-    setOpenTopicIdByLessonId((previous) => ({ ...previous, [lesson.id]: topic.id }));
     resetQuizSession();
   };
 
@@ -740,10 +722,8 @@ export function ModuleViewerPage() {
     if (quiz.lesson_id !== null) {
       const lessonId = Number(quiz.lesson_id);
       setSelectedLessonId(lessonId);
-      setExpandedLessons((previous) => ({ ...previous, [lessonId]: true }));
     }
 
-    setSelectedTopicId(null);
     setSelectedAssessmentId(quiz.id);
     if (!isQuizOngoing) {
       resetQuizSession();
@@ -755,11 +735,6 @@ export function ModuleViewerPage() {
 
     if (item.type === 'lesson') {
       selectLesson(item.lesson);
-      return;
-    }
-
-    if (item.type === 'topic') {
-      selectTopic(item.lesson, item.topic);
       return;
     }
 
@@ -782,23 +757,190 @@ export function ModuleViewerPage() {
     normalizeUrlCandidate(selectedLesson?.overview_image_url) ??
     normalizeUrlCandidate(selectedLessonFallbackContent?.content_url);
 
-  const selectedTopicTextBlock =
-    selectedTopicContent.find((block) => block.body_text.trim().length > 0) ?? null;
-  const selectedTopicMediaBlock =
-    selectedTopicContent.find((block) => normalizeUrlCandidate(block.content_url) !== null) ?? null;
-  const selectedTopicDisplayHtmlRaw = (selectedTopicTextBlock?.body_text ?? '').trim();
-  const selectedTopicDisplayHtml = selectedTopicDisplayHtmlRaw
-    ? sanitizeRichHtml(selectedTopicDisplayHtmlRaw)
+  const selectedLessonSteps = useMemo<LessonViewStep[]>(() => {
+    if (!selectedLesson) return [];
+
+    const steps: LessonViewStep[] = [
+      {
+        key: `lesson-${selectedLesson.id}-overview`,
+        kind: 'overview',
+        title: selectedLesson.title,
+        html: selectedLessonDisplayHtml,
+        mediaUrl: selectedLessonDisplayMediaUrl,
+      },
+    ];
+
+    selectedLessonTopicGroups.forEach(({ topic, sections }) => {
+      steps.push({
+        key: `lesson-${selectedLesson.id}-topic-${topic.id}`,
+        kind: 'topic',
+        topic,
+        sections,
+      });
+    });
+
+    return steps;
+  }, [
+    selectedLesson,
+    selectedLessonDisplayHtml,
+    selectedLessonDisplayMediaUrl,
+    selectedLessonTopicGroups,
+  ]);
+
+  const selectedLessonStepIndexRaw = selectedLesson
+    ? activeLessonStepIndexByLessonId[selectedLesson.id] ?? 0
+    : 0;
+  const selectedLessonStepIndex =
+    selectedLessonSteps.length === 0
+      ? 0
+      : Math.max(0, Math.min(selectedLessonSteps.length - 1, selectedLessonStepIndexRaw));
+  const selectedLessonStep = selectedLessonSteps[selectedLessonStepIndex] ?? null;
+  const selectedLessonViewedStepKeys = selectedLesson ? viewedStepKeysByLessonId[selectedLesson.id] ?? {} : {};
+  const selectedLessonViewedStepCount = selectedLesson
+    ? selectedLesson.completed
+      ? selectedLessonSteps.length
+      : selectedLessonSteps.reduce((count, step) => count + (selectedLessonViewedStepKeys[step.key] ? 1 : 0), 0)
+    : 0;
+  const isCurrentLessonStepViewed = selectedLessonStep
+    ? Boolean(selectedLesson?.completed || selectedLessonViewedStepKeys[selectedLessonStep.key])
+    : false;
+  const selectedLessonCanAdvance = Boolean(selectedLesson?.completed || isCurrentLessonStepViewed);
+  const hasPreviousLessonStep = selectedLessonStepIndex > 0;
+  const hasNextLessonStep = selectedLessonStepIndex < selectedLessonSteps.length - 1;
+  const isLessonStepMode = Boolean(selectedLesson) && !selectedAssessment && selectedLessonSteps.length > 0;
+  const selectedLessonStepPositionLabel = selectedLesson
+    ? selectedLessonStep
+      ? selectedLessonStep.kind === 'overview'
+        ? `Lesson ${selectedLesson.sequence_no} - Overview`
+        : selectedLessonStep.topic.title
+      : `Lesson ${selectedLesson.sequence_no}`
     : '';
-  const selectedTopicDisplayMediaUrl = normalizeUrlCandidate(selectedTopicMediaBlock?.content_url);
+  const displayedPositionLabel = isLessonStepMode ? selectedLessonStepPositionLabel : currentPositionLabel;
+
   const lessonTitleDisplay = selectedLesson ? `${selectedLesson.sequence_no}.0 ${selectedLesson.title}` : '';
-  const topicTitleDisplay =
-    selectedLesson && selectedTopic
-      ? `${selectedLesson.sequence_no}.0.${selectedTopic.sort_order} ${selectedTopic.title}`
-      : '';
-  const contentTitleDisplay = selectedTopic ? topicTitleDisplay : lessonTitleDisplay;
+  const contentTitleDisplay = selectedLessonStepPositionLabel || lessonTitleDisplay;
   const globalToolbarTitle = selectedAssessment?.title ?? (!selectedLesson ? moduleTitle || 'Module' : '');
   const isLessonOrTopicView = Boolean(selectedLesson) && !selectedAssessment;
+
+  const updateSelectedLessonReadProgress = () => {
+    if (!selectedLesson || selectedAssessment || !selectedLessonStep) return;
+    const container = contentScrollContainerRef.current;
+    if (!container) return;
+
+    const maxScrollable = container.scrollHeight - container.clientHeight;
+    const rawStepPercent = maxScrollable <= 2 ? 100 : Math.round((container.scrollTop / maxScrollable) * 100);
+    const nextStepPercent = Math.max(0, Math.min(100, rawStepPercent));
+
+    const totalSteps = selectedLessonSteps.length || 1;
+    const isStepAlreadyViewed = selectedLesson.completed || Boolean(selectedLessonViewedStepKeys[selectedLessonStep.key]);
+    const viewedCountBefore = selectedLesson.completed ? totalSteps : selectedLessonViewedStepCount;
+    const viewedCountAfter =
+      isStepAlreadyViewed || nextStepPercent < 99 ? viewedCountBefore : viewedCountBefore + 1;
+
+    const aggregateProgress = selectedLesson.completed
+      ? 100
+      : isStepAlreadyViewed
+        ? Math.round((viewedCountBefore / totalSteps) * 100)
+        : Math.round(((viewedCountBefore + nextStepPercent / 100) / totalSteps) * 100);
+    const nextProgress = Math.max(0, Math.min(100, aggregateProgress));
+
+    setReadProgressByLessonId((previous) => {
+      const current = previous[selectedLesson.id] ?? 0;
+      if (selectedLesson.completed) {
+        if (current === 100) return previous;
+        return { ...previous, [selectedLesson.id]: 100 };
+      }
+      if (nextProgress <= current) return previous;
+      return { ...previous, [selectedLesson.id]: nextProgress };
+    });
+
+    if (!selectedLesson.completed && nextStepPercent >= 99) {
+      setViewedStepKeysByLessonId((previous) => {
+        const lessonViewedSteps = previous[selectedLesson.id] ?? {};
+        if (lessonViewedSteps[selectedLessonStep.key]) return previous;
+        return {
+          ...previous,
+          [selectedLesson.id]: {
+            ...lessonViewedSteps,
+            [selectedLessonStep.key]: true,
+          },
+        };
+      });
+    }
+
+    if (
+      !selectedLesson.completed &&
+      viewedCountAfter >= totalSteps &&
+      !isMutating &&
+      !completeInFlightLessonIdsRef.current[selectedLesson.id]
+    ) {
+      void handleCompleteLesson(selectedLesson.id);
+    }
+  };
+
+  useEffect(() => {
+    if (!selectedLesson || selectedAssessment || !selectedLessonStep) return;
+    if (selectedLessonStepIndex !== selectedLessonStepIndexRaw) {
+      setActiveLessonStepIndexByLessonId((previous) => ({ ...previous, [selectedLesson.id]: selectedLessonStepIndex }));
+      return;
+    }
+    const frameId = window.requestAnimationFrame(() => {
+      updateSelectedLessonReadProgress();
+    });
+    return () => window.cancelAnimationFrame(frameId);
+  }, [
+    selectedLesson?.id,
+    selectedLesson?.completed,
+    selectedAssessment?.id,
+    selectedLessonStep?.key,
+    selectedLessonStepIndex,
+    selectedLessonStepIndexRaw,
+    selectedLessonSteps.length,
+    selectedLessonViewedStepCount,
+  ]);
+
+  useEffect(() => {
+    if (!contentScrollContainerRef.current) return;
+    contentScrollContainerRef.current.scrollTop = 0;
+  }, [selectedLesson?.id, selectedAssessment?.id, selectedLessonStepIndex]);
+
+  const handlePreviousNavigation = () => {
+    if (isQuizOngoing) return;
+    if (isLessonStepMode && selectedLesson && hasPreviousLessonStep) {
+      setActiveLessonStepIndexByLessonId((previous) => ({
+        ...previous,
+        [selectedLesson.id]: selectedLessonStepIndex - 1,
+      }));
+      return;
+    }
+    goToSequenceItem(previousSequenceItem);
+  };
+
+  const handleNextNavigation = () => {
+    if (isQuizOngoing) return;
+
+    if (isLessonStepMode && selectedLesson) {
+      if (!selectedLessonCanAdvance) return;
+
+      if (hasNextLessonStep) {
+        setActiveLessonStepIndexByLessonId((previous) => ({
+          ...previous,
+          [selectedLesson.id]: selectedLessonStepIndex + 1,
+        }));
+        return;
+      }
+    }
+
+    goToSequenceItem(nextSequenceItem);
+  };
+
+  const isPreviousNavigationDisabled = isLessonStepMode
+    ? !hasPreviousLessonStep || isQuizOngoing
+    : !previousSequenceItem || !previousSequenceItem.unlocked || isQuizOngoing;
+  const isNextSequenceLocked = !nextSequenceItem || !nextSequenceItem.unlocked;
+  const isNextNavigationDisabled = isLessonStepMode
+    ? isQuizOngoing || !selectedLessonCanAdvance || (!hasNextLessonStep && isNextSequenceLocked)
+    : isQuizOngoing || isNextSequenceLocked;
 
   return (
     <section className="space-y-4">
@@ -813,6 +955,15 @@ export function ModuleViewerPage() {
         >
           {!isSidebarCollapsed ? (
             <aside className="no-scrollbar rounded-xl border border-white/10 bg-slate-900/70 p-5 shadow-sm xl:sticky xl:top-20 xl:h-[calc(100vh-7.5rem)] xl:overflow-y-auto">
+            <div className="mb-3">
+              <Link
+                to="/user/modules"
+                className="inline-flex items-center gap-1 rounded-md border border-white/15 bg-slate-900/70 px-3 py-1.5 text-xs font-semibold text-slate-100 hover:bg-white/10"
+              >
+                <ChevronLeft size={14} />
+                Back to Modules
+              </Link>
+            </div>
             <div className="rounded-xl border border-white/10 bg-white/5 p-4">
               <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">
                 Module {moduleIdNumber || '--'}
@@ -867,9 +1018,13 @@ export function ModuleViewerPage() {
 
                 {lessons.map((lesson, lessonIndex) => {
                   const lessonUnlocked = unlockedLessonIds.has(lesson.id) || lesson.completed;
-                  const lessonTopics = topicsByLessonId[lesson.id] ?? [];
                   const lessonPostTest = postTestByLessonId.get(lesson.id) ?? null;
-                  const isExpanded = Boolean(expandedLessons[lesson.id]);
+                  const lessonProgressPercent = lesson.completed
+                    ? 100
+                    : Math.max(0, Math.min(100, Math.round(readProgressByLessonId[lesson.id] ?? 0)));
+                  const progressRadius = 15;
+                  const progressCircumference = 2 * Math.PI * progressRadius;
+                  const progressOffset = progressCircumference * (1 - lessonProgressPercent / 100);
 
                   const lessonStatus = lesson.completed
                     ? 'Done'
@@ -887,7 +1042,7 @@ export function ModuleViewerPage() {
 
                       <div
                         className={`rounded-lg border transition ${
-                          selectedAssessmentId === null && selectedLessonId === lesson.id && !selectedTopicId
+                          selectedAssessmentId === null && selectedLessonId === lesson.id
                             ? 'border-sky-400/50 bg-sky-500/10'
                             : 'border-sky-400/20 bg-sky-950/20 hover:bg-sky-500/10'
                         } ${lessonUnlocked ? '' : 'opacity-60'}`}
@@ -908,87 +1063,67 @@ export function ModuleViewerPage() {
                             <p className="truncate text-[15px] font-semibold text-white">{lesson.title}</p>
                             <p className="mt-1 text-[12px] text-slate-300">{formatMinutesLabel(lesson.estimated_minutes)}</p>
                           </div>
-                          <StatusPill
-                            text={lessonStatus}
-                            className={
-                              lesson.completed
-                                ? 'border-emerald-300/30 bg-emerald-500/10 text-emerald-200'
-                                : lessonUnlocked
-                                  ? 'border-sky-300/30 bg-sky-500/10 text-sky-200'
-                                  : 'border-slate-400/30 bg-slate-700/30 text-slate-300'
-                            }
-                          />
+                          <div className="flex flex-col items-end gap-1">
+                            <span className="relative inline-flex h-10 w-10 items-center justify-center">
+                              <svg className="h-10 w-10" viewBox="0 0 40 40" aria-hidden="true">
+                                <circle cx="20" cy="20" r={progressRadius} fill="none" stroke="rgba(148, 163, 184, 0.35)" strokeWidth="3" />
+                                <circle
+                                  cx="20"
+                                  cy="20"
+                                  r={progressRadius}
+                                  fill="none"
+                                  stroke={lesson.completed ? 'rgb(52 211 153)' : 'rgb(14 165 233)'}
+                                  strokeWidth="3"
+                                  strokeLinecap="round"
+                                  strokeDasharray={`${progressCircumference}`}
+                                  strokeDashoffset={progressOffset}
+                                  transform="rotate(-90 20 20)"
+                                />
+                              </svg>
+                              <span className="absolute text-[9px] font-semibold text-slate-100">{lessonProgressPercent}%</span>
+                            </span>
+                            <StatusPill
+                              text={lessonStatus}
+                              className={
+                                lesson.completed
+                                  ? 'border-emerald-300/30 bg-emerald-500/10 text-emerald-200'
+                                  : lessonUnlocked
+                                    ? 'border-sky-300/30 bg-sky-500/10 text-sky-200'
+                                    : 'border-slate-400/30 bg-slate-700/30 text-slate-300'
+                              }
+                            />
+                          </div>
                         </button>
-                        <div className="border-t border-white/10 px-3 py-2">
-                          <button
-                            type="button"
-                            onClick={() => toggleLessonExpanded(lesson.id)}
-                            className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-semibold text-slate-300 hover:bg-white/5"
-                          >
-                            {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                            {isExpanded ? 'Collapse' : 'Expand'}
-                          </button>
-                        </div>
                       </div>
 
-                      {isExpanded ? (
-                        <div className="ml-1 mt-2 space-y-2 border-l border-white/10 pl-3">
-                          {lessonTopics.map((topic) => {
-                            const topicActive = selectedAssessmentId === null && selectedTopicId === topic.id;
-                            return (
-                              <button
-                                key={topic.id}
-                                type="button"
-                                disabled={!lessonUnlocked || isQuizOngoing}
-                                onClick={() => selectTopic(lesson, topic)}
-                                className={`flex w-full items-center gap-2 rounded-md border px-3 py-2.5 text-left text-sm disabled:cursor-not-allowed disabled:opacity-50 ${
-                                  topicActive
-                                    ? 'border-sky-400/40 bg-sky-500/10 text-sky-100'
-                                    : 'border-white/10 bg-slate-900/60 text-slate-200 hover:bg-white/5'
-                                }`}
-                              >
-                                <span className="inline-flex h-2 w-2 shrink-0 rounded-full bg-slate-300" />
-                                <span className="truncate">{topic.title}</span>
-                              </button>
-                            );
-                          })}
-
-                          {lessonTopics.length === 0 ? (
-                            <p className="rounded-md border border-white/10 bg-slate-900/60 px-2.5 py-2 text-xs text-slate-400">
-                              No topics available.
-                            </p>
-                          ) : null}
-
-                          {lessonPostTest ? (
-                            <button
-                              type="button"
-                              disabled={!isAssessmentUnlocked(lessonPostTest) || (isQuizOngoing && quizInProgressId !== lessonPostTest.id)}
-                              onClick={() => selectAssessment(lessonPostTest)}
-                            className={`mt-1 flex w-full items-start gap-2 rounded-md border px-3 py-2.5 text-left text-sm disabled:cursor-not-allowed disabled:opacity-50 ${
-                                selectedAssessmentId === lessonPostTest.id
-                                  ? 'border-orange-400/50 bg-orange-500/10 text-orange-100'
-                                  : 'border-orange-400/25 bg-orange-950/20 text-orange-100 hover:bg-orange-500/10'
-                              }`}
-                            >
-                              <span className="mt-0.5 inline-flex h-2 w-2 shrink-0 rounded-full bg-orange-300" />
-                              <span className="min-w-0">
-                                <span className="block truncate font-semibold">Post-Test: {lessonPostTest.title}</span>
-                                <span className="mt-0.5 block text-xs text-slate-300">
-                                  {(() => {
-                                    const latest = latestResultByQuizId.get(lessonPostTest.id);
-                                    if (!latest) return 'No attempts yet';
-                                    return `Latest ${Number(latest.score)}% (${latest.passed ? 'Passed' : 'Failed'})`;
-                                  })()}
-                                </span>
-                              </span>
-                            </button>
-                          ) : (
-                            <p className="mt-1 rounded-md border border-white/10 bg-slate-900/60 px-3 py-2.5 text-sm text-slate-400">
-                              No Post-Test configured.
-                            </p>
-                          )}
-                        </div>
-                      ) : null}
+                      {lessonPostTest ? (
+                        <button
+                          type="button"
+                          disabled={!isAssessmentUnlocked(lessonPostTest) || (isQuizOngoing && quizInProgressId !== lessonPostTest.id)}
+                          onClick={() => selectAssessment(lessonPostTest)}
+                          className={`ml-1 mt-2 flex w-[calc(100%-0.25rem)] items-start gap-2 rounded-md border px-3 py-2.5 text-left text-sm disabled:cursor-not-allowed disabled:opacity-50 ${
+                            selectedAssessmentId === lessonPostTest.id
+                              ? 'border-orange-400/50 bg-orange-500/10 text-orange-100'
+                              : 'border-orange-400/25 bg-orange-950/20 text-orange-100 hover:bg-orange-500/10'
+                          }`}
+                        >
+                          <span className="mt-0.5 inline-flex h-2 w-2 shrink-0 rounded-full bg-orange-300" />
+                          <span className="min-w-0">
+                            <span className="block truncate font-semibold">Post-Test: {lessonPostTest.title}</span>
+                            <span className="mt-0.5 block text-xs text-slate-300">
+                              {(() => {
+                                const latest = latestResultByQuizId.get(lessonPostTest.id);
+                                if (!latest) return 'No attempts yet';
+                                return `Latest ${Number(latest.score)}% (${latest.passed ? 'Passed' : 'Failed'})`;
+                              })()}
+                            </span>
+                          </span>
+                        </button>
+                      ) : (
+                        <p className="ml-1 mt-2 w-[calc(100%-0.25rem)] rounded-md border border-white/10 bg-slate-900/60 px-3 py-2.5 text-sm text-slate-400">
+                          No Post-Test configured.
+                        </p>
+                      )}
                     </div>
                   );
                 })}
@@ -1008,7 +1143,7 @@ export function ModuleViewerPage() {
                       <span className="absolute left-0.5 top-2 inline-flex h-6 w-6 items-center justify-center rounded-full border border-amber-400/40 bg-amber-500/20 text-amber-200">
                         {isAssessmentUnlocked(finalExam) ? <Award size={13} /> : <Lock size={13} />}
                       </span>
-                      <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-amber-200">Final Exam</p>
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-amber-200">Simulation Testing</p>
                       <p className="mt-0.5 text-[15px] font-semibold text-white">{finalExam.title}</p>
                       <p className="mt-1 text-[12px] text-slate-300">{assessmentUnlockMessage(finalExam)}</p>
                     </button>
@@ -1054,7 +1189,11 @@ export function ModuleViewerPage() {
               </div>
             ) : null}
 
-            <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto pr-1 xl:overscroll-contain">
+            <div
+              ref={contentScrollContainerRef}
+              onScroll={updateSelectedLessonReadProgress}
+              className="no-scrollbar min-h-0 flex-1 overflow-y-auto pr-1 xl:overscroll-contain"
+            >
             {selectedAssessment ? (
               <div className="flex h-full min-h-full items-stretch">
                 {isQuizLoading ? (
@@ -1062,211 +1201,472 @@ export function ModuleViewerPage() {
                     <p className="text-sm text-slate-300">Preparing assessment...</p>
                   </article>
                 ) : isResultProcessing ? (
-                  <article className="h-full w-full overflow-hidden rounded-2xl border border-slate-700 bg-slate-950 shadow-sm">
-                    <div className="grid h-full lg:grid-cols-[1fr_420px]">
-                      <div className="flex flex-col justify-center p-8 text-brand-100">
-                        <div className="mx-auto w-full max-w-2xl text-center">
-                          <div className="inline-flex items-center gap-2 rounded-full border border-brand-500/40 bg-brand-500/10 px-3 py-1 text-xs font-semibold uppercase tracking-wider">
-                            <CircleDotDashed size={14} className="animate-spin" />
-                            Validating Assessment
-                          </div>
-                          <h3 className="mt-4 text-2xl font-bold text-white md:text-3xl">Running Answer Integrity Checks</h3>
-                          <p className="mt-3 text-sm text-brand-100/90">
-                            Please wait while the system verifies all submitted responses and computes your final score.
-                          </p>
-                        </div>
-                      </div>
-                      <aside className="flex min-h-0 flex-col border-t border-slate-700 bg-black/40 p-5 font-mono text-xs text-brand-100 lg:border-l lg:border-t-0">
-                        <div className="mb-4 flex items-center gap-2 border-b border-white/10 pb-3 text-brand-300">
-                          <Cpu size={14} />
-                          <span className="uppercase tracking-wider">Assessment Terminal</span>
-                        </div>
-                        <div ref={terminalLogBoxRef} className="no-scrollbar min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
-                          {quizTerminalLogs.map((log, index) => (
-                            <p key={`${log}-${index}`} className="leading-relaxed text-brand-100/90">
-                              {log}
-                            </p>
-                          ))}
-                        </div>
-                      </aside>
-                    </div>
-                  </article>
-                ) : isSelectedAssessmentOngoing ? (
-                  <article className="h-full w-full overflow-hidden rounded-2xl border border-white/10 bg-slate-900/70 shadow-sm">
-                    <div className="grid h-full lg:grid-cols-[minmax(0,1fr)_360px]">
-                      <div className="flex h-full p-6 md:p-8">
-                        <div className="mx-auto flex h-full w-full max-w-4xl flex-col">
-                          <div className="flex flex-wrap items-center justify-between gap-3">
-                            <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/10 px-3 py-1 text-xs font-semibold uppercase tracking-wider text-slate-200">
-                              <HelpCircle size={14} />
-                              Question {quizCurrentIndex + 1} of {quizQuestions.length}
+                  isSimulationAssessment ? (
+                    <article className="h-full w-full overflow-hidden rounded-2xl border border-slate-700 bg-slate-950 shadow-sm">
+                      <div className="grid h-full lg:grid-cols-[1fr_420px]">
+                        <div className="flex flex-col justify-center p-8 text-brand-100">
+                          <div className="mx-auto w-full max-w-2xl text-center">
+                            <div className="inline-flex items-center gap-2 rounded-full border border-brand-500/40 bg-brand-500/10 px-3 py-1 text-xs font-semibold uppercase tracking-wider">
+                              <CircleDotDashed size={14} className="animate-spin" />
+                              Validating Assessment
                             </div>
-                            <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-                              Submitted {submittedQuestionsCount} / {quizQuestions.length}
+                            <h3 className="mt-4 text-2xl font-bold text-white md:text-3xl">Running Answer Integrity Checks</h3>
+                            <p className="mt-3 text-sm text-brand-100/90">
+                              Please wait while the system verifies all submitted responses and computes your final score.
                             </p>
+                          </div>
+                        </div>
+                        <aside className="flex min-h-0 flex-col border-t border-slate-700 bg-black/40 p-5 font-mono text-xs text-brand-100 lg:border-l lg:border-t-0">
+                          <div className="mb-4 flex items-center gap-2 border-b border-white/10 pb-3 text-brand-300">
+                            <Cpu size={14} />
+                            <span className="uppercase tracking-wider">Assessment Terminal</span>
+                          </div>
+                          <div ref={terminalLogBoxRef} className="no-scrollbar min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
+                            {quizTerminalLogs.map((log, index) => (
+                              <p key={`${log}-${index}`} className="leading-relaxed text-brand-100/90">
+                                {log}
+                              </p>
+                            ))}
+                          </div>
+                        </aside>
+                      </div>
+                    </article>
+                  ) : (
+                    <article className="flex h-full w-full items-center justify-center rounded-2xl border border-white/10 bg-slate-900/70 p-6 shadow-sm md:p-8">
+                      <div className="text-center">
+                        <div className="inline-flex items-center gap-2 rounded-full border border-cyan-300/50 bg-cyan-500/10 px-3 py-1 text-xs font-semibold uppercase tracking-wider text-cyan-200">
+                          <CircleDotDashed size={14} className="animate-spin" />
+                          Submitting Assessment
+                        </div>
+                        <p className="mt-3 text-sm text-slate-300">Please wait while we process your score.</p>
+                      </div>
+                    </article>
+                  )
+                ) : isSelectedAssessmentOngoing ? (
+                  isSimulationAssessment ? (
+                    <article className="h-full w-full overflow-hidden rounded-2xl border border-white/10 bg-slate-900/70 shadow-sm">
+                      <div className="grid h-full lg:grid-cols-[minmax(0,1fr)_360px]">
+                        <div className="relative flex h-full p-6 md:p-8">
+                          <div className="mx-auto flex h-full w-full max-w-4xl flex-col">
+                            <div className="flex flex-wrap items-center justify-between gap-3">
+                              <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/10 px-3 py-1 text-xs font-semibold uppercase tracking-wider text-slate-200">
+                                <HelpCircle size={14} />
+                                Question {quizCurrentIndex + 1} of {quizQuestions.length}
+                              </div>
+                              <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                                Submitted {submittedQuestionsCount} / {quizQuestions.length}
+                              </p>
+                            </div>
+
+                            {currentQuizQuestion ? (
+                              <>
+                                <div className="mt-6 flex flex-1 flex-col">
+                                  <h3 className="text-2xl font-bold leading-tight text-white md:text-3xl">{currentQuizQuestion.prompt}</h3>
+                                  <div className="mt-7 grid gap-3">
+                                    {currentQuizQuestion.answers.map((answer) => (
+                                      <button
+                                        key={answer.id}
+                                        type="button"
+                                        disabled={isCurrentQuestionSubmitted}
+                                        onClick={() =>
+                                          setQuizAnswers((previous) => ({
+                                            ...previous,
+                                            [currentQuizQuestion.id]: answer.id,
+                                          }))
+                                        }
+                                        className={`flex w-full items-center justify-between rounded-lg border px-5 py-4 text-left text-base font-medium disabled:cursor-not-allowed disabled:opacity-70 ${
+                                          currentQuizAnswerId === answer.id
+                                            ? 'border-slate-400 bg-white/5'
+                                            : 'border-white/10 bg-slate-900/70 hover:bg-white/5'
+                                        }`}
+                                      >
+                                        <span>{answer.answer_text}</span>
+                                        {currentQuizAnswerId === answer.id ? (
+                                          <CheckCircle2 size={18} className="text-brand-400" />
+                                        ) : null}
+                                      </button>
+                                    ))}
+                                  </div>
+                                </div>
+
+                                <div className="mt-auto flex flex-wrap items-center justify-between gap-3 border-t border-white/10 pt-6">
+                                  <p className="text-sm text-slate-400">
+                                    {isCurrentQuestionSubmitted
+                                      ? 'Answer submitted.'
+                                      : 'Submit this answer to proceed to the next question.'}
+                                  </p>
+                                  <button
+                                    type="button"
+                                    disabled={isCurrentQuestionSubmitted || isQuizSubmitting || !currentQuizAnswerId}
+                                    onClick={handleSubmitCurrentQuestion}
+                                    className="inline-flex items-center gap-2 rounded-lg border border-cyan-300/60 bg-cyan-500 px-7 py-3 text-base font-semibold text-slate-950 shadow-[0_0_0_1px_rgba(34,211,238,0.35),0_10px_24px_rgba(6,182,212,0.35)] transition hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-60"
+                                  >
+                                    {quizCurrentIndex >= quizQuestions.length - 1 ? 'Submit Answer' : 'Submit Answer & Next'}
+                                    <ChevronRight size={16} />
+                                  </button>
+                                </div>
+                              </>
+                            ) : (
+                              <div className="mt-6 rounded-lg border border-white/10 bg-white/5 p-4 text-sm text-slate-300">
+                                No questions available for this assessment.
+                              </div>
+                            )}
                           </div>
 
-                          {currentQuizQuestion ? (
-                            <>
-                              <div className="mt-6 flex flex-1 flex-col">
-                                <h3 className="text-2xl font-bold leading-tight text-white md:text-3xl">{currentQuizQuestion.prompt}</h3>
-                                <div className="mt-7 grid gap-3">
-                                  {currentQuizQuestion.answers.map((answer) => (
-                                    <button
-                                      key={answer.id}
-                                      type="button"
-                                      disabled={isCurrentQuestionSubmitted}
-                                      onClick={() =>
-                                        setQuizAnswers((previous) => ({
-                                          ...previous,
-                                          [currentQuizQuestion.id]: answer.id,
-                                        }))
-                                      }
-                                      className={`flex w-full items-center justify-between rounded-lg border px-5 py-4 text-left text-base font-medium disabled:cursor-not-allowed disabled:opacity-70 ${
-                                        currentQuizAnswerId === answer.id
-                                          ? 'border-slate-400 bg-white/5'
-                                          : 'border-white/10 bg-slate-900/70 hover:bg-white/5'
-                                      }`}
-                                    >
-                                      <span>{answer.answer_text}</span>
-                                      {currentQuizAnswerId === answer.id ? (
-                                        <CheckCircle2 size={18} className="text-brand-400" />
-                                      ) : null}
-                                    </button>
-                                  ))}
+                          {isSubmitConfirmOpen ? (
+                            <div className="absolute inset-0 z-20 flex items-center justify-center bg-slate-950/75 p-4 backdrop-blur-sm">
+                              <div className="w-full max-w-md rounded-xl border border-white/10 bg-slate-900/80 p-5 shadow-xl">
+                                <h3 className="text-lg font-bold text-white">Submit Assessment?</h3>
+                                <p className="mt-2 text-sm text-slate-300">
+                                  This is the last question. Confirm to submit all your answers and see your result.
+                                </p>
+                                <div className="mt-4 flex justify-end gap-2">
+                                  <button
+                                    type="button"
+                                    disabled={isQuizSubmitting}
+                                    onClick={() => setIsSubmitConfirmOpen(false)}
+                                    className="rounded-md border border-white/20 px-4 py-2 text-sm font-semibold text-slate-200 disabled:cursor-not-allowed disabled:opacity-60"
+                                  >
+                                    Cancel
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={isQuizSubmitting}
+                                    onClick={() => void handleFinalizeQuiz()}
+                                    className="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+                                  >
+                                    {isQuizSubmitting ? 'Submitting...' : 'Confirm Submit'}
+                                  </button>
                                 </div>
                               </div>
-
-                              <div className="mt-auto flex flex-wrap items-center justify-between gap-3 border-t border-white/10 pt-6">
-                                <p className="text-sm text-slate-400">
-                                  {isCurrentQuestionSubmitted
-                                    ? 'Answer submitted.'
-                                    : 'Submit this answer to proceed to the next question.'}
-                                </p>
-                                <button
-                                  type="button"
-                                  disabled={isCurrentQuestionSubmitted || isQuizSubmitting || !currentQuizAnswerId}
-                                  onClick={handleSubmitCurrentQuestion}
-                                  className="inline-flex items-center gap-2 rounded-lg border border-cyan-300/60 bg-cyan-500 px-7 py-3 text-base font-semibold text-slate-950 shadow-[0_0_0_1px_rgba(34,211,238,0.35),0_10px_24px_rgba(6,182,212,0.35)] transition hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-60"
-                                >
-                                  {quizCurrentIndex >= quizQuestions.length - 1 ? 'Submit Answer' : 'Submit Answer & Next'}
-                                  <ChevronRight size={16} />
-                                </button>
-                              </div>
-                            </>
-                          ) : (
-                            <div className="mt-6 rounded-lg border border-white/10 bg-white/5 p-4 text-sm text-slate-300">
-                              No questions available for this assessment.
                             </div>
-                          )}
+                          ) : null}
                         </div>
+
+                        <aside className="flex min-h-0 flex-col border-t border-slate-700 bg-slate-950 p-5 font-mono text-xs text-brand-100 lg:border-l lg:border-t-0">
+                          <div className="mb-4 flex items-center gap-2 border-b border-white/10 pb-3 text-brand-300">
+                            <Cpu size={14} />
+                            <span className="uppercase tracking-wider">Live Terminal</span>
+                          </div>
+                          <div className="mb-3 grid grid-cols-2 gap-2 text-[10px]">
+                            <div className="rounded border border-white/10 bg-white/5 px-2 py-1 text-slate-300">
+                              Q {quizCurrentIndex + 1}/{quizQuestions.length}
+                            </div>
+                            <div className="rounded border border-white/10 bg-white/5 px-2 py-1 text-slate-300">
+                              Submitted {submittedQuestionsCount}
+                            </div>
+                          </div>
+                          <div ref={terminalLogBoxRef} className="no-scrollbar min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
+                            {quizTerminalLogs.map((log, index) => (
+                              <p key={`${log}-${index}`} className="leading-relaxed text-brand-100/90">
+                                {log}
+                              </p>
+                            ))}
+                          </div>
+                        </aside>
                       </div>
-
-                      <aside className="flex min-h-0 flex-col border-t border-slate-700 bg-slate-950 p-5 font-mono text-xs text-brand-100 lg:border-l lg:border-t-0">
-                        <div className="mb-4 flex items-center gap-2 border-b border-white/10 pb-3 text-brand-300">
-                          <Cpu size={14} />
-                          <span className="uppercase tracking-wider">Live Terminal</span>
-                        </div>
-                        <div className="mb-3 grid grid-cols-2 gap-2 text-[10px]">
-                          <div className="rounded border border-white/10 bg-white/5 px-2 py-1 text-slate-300">
-                            Q {quizCurrentIndex + 1}/{quizQuestions.length}
+                    </article>
+                  ) : (
+                    <article className="relative w-full overflow-hidden rounded-2xl border border-white/10 bg-slate-900/70 p-6 shadow-sm md:p-8">
+                      <div className="mx-auto flex w-full max-w-4xl flex-col">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/10 px-3 py-1 text-xs font-semibold uppercase tracking-wider text-slate-200">
+                            <HelpCircle size={14} />
+                            Question {quizCurrentIndex + 1} of {quizQuestions.length}
                           </div>
-                          <div className="rounded border border-white/10 bg-white/5 px-2 py-1 text-slate-300">
-                            Submitted {submittedQuestionsCount}
-                          </div>
-                        </div>
-                        <div ref={terminalLogBoxRef} className="no-scrollbar min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
-                          {quizTerminalLogs.map((log, index) => (
-                            <p key={`${log}-${index}`} className="leading-relaxed text-brand-100/90">
-                              {log}
-                            </p>
-                          ))}
-                        </div>
-                      </aside>
-                    </div>
-                  </article>
-                ) : selectedAssessmentSessionResult ? (
-                  <article className="h-full w-full overflow-hidden rounded-2xl border border-cyan-400/30 bg-slate-950 shadow-sm">
-                    <div className="grid h-full lg:grid-cols-[minmax(0,1fr)_360px]">
-                      <div className="flex h-full flex-col justify-center p-6 md:p-10">
-                        <p className="font-mono text-xs font-semibold uppercase tracking-[0.18em] text-cyan-300">
-                          Assessment Complete
-                        </p>
-                        <h3 className="mt-3 text-3xl font-bold text-white md:text-4xl">
-                          {selectedAssessmentSessionResult.passed ? 'Quiz Passed' : 'Quiz Failed'}
-                        </h3>
-                        <p className="mt-2 text-sm text-slate-300">
-                          {selectedAssessment.title} evaluation finished. Review your score and continue to the next learning step.
-                        </p>
-
-                        <div className="mt-6 grid gap-3 sm:grid-cols-3">
-                          <div className="rounded-lg border border-white/10 bg-white/5 p-4">
-                            <p className="font-mono text-[11px] uppercase tracking-wider text-slate-400">Score</p>
-                            <p className="mt-1 text-2xl font-bold text-cyan-300">{Number(selectedAssessmentSessionResult.score)}%</p>
-                          </div>
-                          <div className="rounded-lg border border-white/10 bg-white/5 p-4">
-                            <p className="font-mono text-[11px] uppercase tracking-wider text-slate-400">Passing</p>
-                            <p className="mt-1 text-2xl font-bold text-white">{selectedAssessment.passing_score}%</p>
-                          </div>
-                          <div className="rounded-lg border border-white/10 bg-white/5 p-4">
-                            <p className="font-mono text-[11px] uppercase tracking-wider text-slate-400">Attempt</p>
-                            <p className="mt-1 text-2xl font-bold text-white">#{selectedAssessmentSessionResult.attempt_no}</p>
-                          </div>
-                        </div>
-
-                        <div className="mt-5">
-                          <StatusPill
-                            text={selectedAssessmentSessionResult.passed ? 'Passed' : 'Failed'}
-                            className={
-                              selectedAssessmentSessionResult.passed
-                                ? 'border-emerald-300/30 bg-emerald-500/10 text-emerald-200'
-                                : 'border-rose-300/30 bg-rose-500/10 text-rose-200'
-                            }
-                          />
-                        </div>
-
-                        <div className="mt-6 flex flex-wrap items-center gap-3">
-                          <button
-                            type="button"
-                            disabled={
-                              selectedAssessmentAttemptsRemaining <= 0 ||
-                              isQuizSubmitting ||
-                              isQuizLoading
-                            }
-                            onClick={() => void handleStartQuiz(selectedAssessment)}
-                            className="inline-flex items-center gap-2 rounded-lg border border-cyan-300/60 bg-cyan-500 px-6 py-3 text-sm font-semibold text-slate-950 shadow-[0_0_0_1px_rgba(34,211,238,0.35),0_10px_24px_rgba(6,182,212,0.35)] transition hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-60"
-                          >
-                            <CirclePlay size={16} />
-                            Take Quiz Again
-                          </button>
-                          <p className="text-sm text-slate-300">
-                            Remaining attempts: {selectedAssessmentAttemptsRemaining}
+                          <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                            Submitted {submittedQuestionsCount} / {quizQuestions.length}
                           </p>
                         </div>
+
+                        {currentQuizQuestion ? (
+                          <>
+                            <div className="mt-6 flex flex-1 flex-col">
+                              <h3 className="text-2xl font-bold leading-tight text-white md:text-3xl">{currentQuizQuestion.prompt}</h3>
+                              <div className="mt-7 grid gap-3">
+                                {currentQuizQuestion.answers.map((answer) => (
+                                  <button
+                                    key={answer.id}
+                                    type="button"
+                                    disabled={isCurrentQuestionSubmitted}
+                                    onClick={() =>
+                                      setQuizAnswers((previous) => ({
+                                        ...previous,
+                                        [currentQuizQuestion.id]: answer.id,
+                                      }))
+                                    }
+                                    className={`flex w-full items-center justify-between rounded-lg border px-5 py-4 text-left text-base font-medium disabled:cursor-not-allowed disabled:opacity-70 ${
+                                      currentQuizAnswerId === answer.id
+                                        ? 'border-slate-400 bg-white/5'
+                                        : 'border-white/10 bg-slate-900/70 hover:bg-white/5'
+                                    }`}
+                                  >
+                                    <span>{answer.answer_text}</span>
+                                    {currentQuizAnswerId === answer.id ? (
+                                      <CheckCircle2 size={18} className="text-brand-400" />
+                                    ) : null}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+
+                            <div className="mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-white/10 pt-6">
+                              <p className="text-sm text-slate-400">
+                                {isCurrentQuestionSubmitted
+                                  ? 'Answer submitted.'
+                                  : 'Submit this answer to proceed to the next question.'}
+                              </p>
+                              <button
+                                type="button"
+                                disabled={isCurrentQuestionSubmitted || isQuizSubmitting || !currentQuizAnswerId}
+                                onClick={handleSubmitCurrentQuestion}
+                                className="inline-flex items-center gap-2 rounded-lg bg-brand-600 px-6 py-3 text-sm font-semibold text-white transition hover:bg-brand-500 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                {quizCurrentIndex >= quizQuestions.length - 1 ? 'Submit Answer' : 'Submit Answer & Next'}
+                                <ChevronRight size={16} />
+                              </button>
+                            </div>
+                          </>
+                        ) : (
+                          <div className="mt-6 rounded-lg border border-white/10 bg-white/5 p-4 text-sm text-slate-300">
+                            No questions available for this assessment.
+                          </div>
+                        )}
                       </div>
 
-                      <aside className="flex min-h-0 flex-col border-t border-slate-700 bg-black/40 p-5 font-mono text-xs text-brand-100 lg:border-l lg:border-t-0">
-                        <div className="mb-4 flex items-center gap-2 border-b border-white/10 pb-3 text-brand-300">
-                          <Cpu size={14} />
-                          <span className="uppercase tracking-wider">Result Terminal</span>
-                        </div>
-                        <div ref={terminalLogBoxRef} className="no-scrollbar min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
-                          {quizTerminalLogs.map((log, index) => (
-                            <p key={`${log}-${index}`} className="leading-relaxed text-brand-100/90">
-                              {log}
+                      {isSubmitConfirmOpen ? (
+                        <div className="absolute inset-0 z-20 flex items-center justify-center bg-slate-950/75 p-4 backdrop-blur-sm">
+                          <div className="w-full max-w-md rounded-xl border border-white/10 bg-slate-900/80 p-5 shadow-xl">
+                            <h3 className="text-lg font-bold text-white">Submit Assessment?</h3>
+                            <p className="mt-2 text-sm text-slate-300">
+                              This is the last question. Confirm to submit all your answers and see your result.
                             </p>
-                          ))}
+                            <div className="mt-4 flex justify-end gap-2">
+                              <button
+                                type="button"
+                                disabled={isQuizSubmitting}
+                                onClick={() => setIsSubmitConfirmOpen(false)}
+                                className="rounded-md border border-white/20 px-4 py-2 text-sm font-semibold text-slate-200 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                Cancel
+                              </button>
+                              <button
+                                type="button"
+                                disabled={isQuizSubmitting}
+                                onClick={() => void handleFinalizeQuiz()}
+                                className="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                {isQuizSubmitting ? 'Submitting...' : 'Confirm Submit'}
+                              </button>
+                            </div>
+                          </div>
                         </div>
-                      </aside>
-                    </div>
-                  </article>
+                      ) : null}
+                    </article>
+                  )
+                ) : selectedAssessmentSessionResult ? (
+                  isSimulationAssessment ? (
+                    <article className="h-full w-full overflow-hidden rounded-2xl border border-cyan-400/30 bg-slate-950 shadow-sm">
+                      <div className="grid h-full lg:grid-cols-[minmax(0,1fr)_360px]">
+                        <div className="flex h-full flex-col justify-center p-6 md:p-10">
+                          <p className="font-mono text-xs font-semibold uppercase tracking-[0.18em] text-cyan-300">
+                            Assessment Complete
+                          </p>
+                          <h3 className="mt-3 text-3xl font-bold text-white md:text-4xl">
+                            {selectedAssessmentSessionResult.passed ? 'Quiz Passed' : 'Quiz Failed'}
+                          </h3>
+                          <p className="mt-2 text-sm text-slate-300">
+                            {selectedAssessment.title} evaluation finished. Review your score and continue to the next learning step.
+                          </p>
+
+                          <div className="mt-6 grid gap-3 sm:grid-cols-3">
+                            <div className="rounded-lg border border-white/10 bg-white/5 p-4">
+                              <p className="font-mono text-[11px] uppercase tracking-wider text-slate-400">Score</p>
+                              <p className="mt-1 text-2xl font-bold text-cyan-300">{Number(selectedAssessmentSessionResult.score)}%</p>
+                            </div>
+                            <div className="rounded-lg border border-white/10 bg-white/5 p-4">
+                              <p className="font-mono text-[11px] uppercase tracking-wider text-slate-400">Passing</p>
+                              <p className="mt-1 text-2xl font-bold text-white">{selectedAssessment.passing_score}%</p>
+                            </div>
+                            <div className="rounded-lg border border-white/10 bg-white/5 p-4">
+                              <p className="font-mono text-[11px] uppercase tracking-wider text-slate-400">Attempt</p>
+                              <p className="mt-1 text-2xl font-bold text-white">#{selectedAssessmentSessionResult.attempt_no}</p>
+                            </div>
+                          </div>
+
+                          <div className="mt-5">
+                            <StatusPill
+                              text={selectedAssessmentSessionResult.passed ? 'Passed' : 'Failed'}
+                              className={
+                                selectedAssessmentSessionResult.passed
+                                  ? 'border-emerald-300/30 bg-emerald-500/10 text-emerald-200'
+                                  : 'border-rose-300/30 bg-rose-500/10 text-rose-200'
+                              }
+                            />
+                          </div>
+
+                          <div className="mt-6 flex flex-wrap items-center gap-3">
+                            <button
+                              type="button"
+                              disabled={
+                                selectedAssessmentAttemptsRemaining <= 0 ||
+                                isQuizSubmitting ||
+                                isQuizLoading
+                              }
+                              onClick={() => void handleStartQuiz(selectedAssessment)}
+                              className="inline-flex items-center gap-2 rounded-lg border border-cyan-300/60 bg-cyan-500 px-6 py-3 text-sm font-semibold text-slate-950 shadow-[0_0_0_1px_rgba(34,211,238,0.35),0_10px_24px_rgba(6,182,212,0.35)] transition hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              <CirclePlay size={16} />
+                              Take Quiz Again
+                            </button>
+                            <p className="text-sm text-slate-300">
+                              Remaining attempts: {selectedAssessmentAttemptsRemaining}
+                            </p>
+                          </div>
+                        </div>
+
+                        <aside className="flex min-h-0 flex-col border-t border-slate-700 bg-black/40 p-5 font-mono text-xs text-brand-100 lg:border-l lg:border-t-0">
+                          <div className="mb-4 flex items-center gap-2 border-b border-white/10 pb-3 text-brand-300">
+                            <Cpu size={14} />
+                            <span className="uppercase tracking-wider">Result Terminal</span>
+                          </div>
+                          <div ref={terminalLogBoxRef} className="no-scrollbar min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
+                            {quizTerminalLogs.map((log, index) => (
+                              <p key={`${log}-${index}`} className="leading-relaxed text-brand-100/90">
+                                {log}
+                              </p>
+                            ))}
+                          </div>
+                        </aside>
+                      </div>
+                    </article>
+                  ) : (
+                    <article className="w-full rounded-2xl border border-white/10 bg-slate-900/70 p-6 shadow-sm md:p-8">
+                      <p className="text-xs font-semibold uppercase tracking-[0.14em] text-brand-300">Assessment Complete</p>
+                      <h3 className="mt-2 text-2xl font-bold text-white">
+                        {selectedAssessmentSessionResult.passed ? 'Quiz Passed' : 'Quiz Failed'}
+                      </h3>
+                      <p className="mt-2 text-sm text-slate-300">
+                        {selectedAssessment.title} finished. Review your score below.
+                      </p>
+
+                      <div className="mt-6 grid gap-3 sm:grid-cols-3">
+                        <div className="rounded-lg border border-white/10 bg-white/5 p-4">
+                          <p className="text-[11px] uppercase tracking-wider text-slate-400">Score</p>
+                          <p className="mt-1 text-2xl font-bold text-brand-300">{Number(selectedAssessmentSessionResult.score)}%</p>
+                        </div>
+                        <div className="rounded-lg border border-white/10 bg-white/5 p-4">
+                          <p className="text-[11px] uppercase tracking-wider text-slate-400">Passing</p>
+                          <p className="mt-1 text-2xl font-bold text-white">{selectedAssessment.passing_score}%</p>
+                        </div>
+                        <div className="rounded-lg border border-white/10 bg-white/5 p-4">
+                          <p className="text-[11px] uppercase tracking-wider text-slate-400">Attempt</p>
+                          <p className="mt-1 text-2xl font-bold text-white">#{selectedAssessmentSessionResult.attempt_no}</p>
+                        </div>
+                      </div>
+
+                      <div className="mt-5">
+                        <StatusPill
+                          text={selectedAssessmentSessionResult.passed ? 'Passed' : 'Failed'}
+                          className={
+                            selectedAssessmentSessionResult.passed
+                              ? 'border-emerald-300/30 bg-emerald-500/10 text-emerald-200'
+                              : 'border-rose-300/30 bg-rose-500/10 text-rose-200'
+                          }
+                        />
+                      </div>
+
+                      <div className="mt-6 flex flex-wrap items-center gap-3">
+                        <button
+                          type="button"
+                          disabled={
+                            selectedAssessmentAttemptsRemaining <= 0 ||
+                            isQuizSubmitting ||
+                            isQuizLoading
+                          }
+                          onClick={() => void handleStartQuiz(selectedAssessment)}
+                          className="inline-flex items-center gap-2 rounded-lg bg-brand-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-brand-500 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          <CirclePlay size={16} />
+                          Take Quiz Again
+                        </button>
+                        <p className="text-sm text-slate-300">
+                          Remaining attempts: {selectedAssessmentAttemptsRemaining}
+                        </p>
+                      </div>
+                    </article>
+                  )
                 ) : (
                   (() => {
-                    const stage = getAssessmentStage(selectedAssessment);
+                    const stage = selectedAssessmentStage ?? 'pre';
                     const meta = assessmentViewMeta[stage];
                     const AssessmentIcon = meta.icon;
                     const latest = selectedAssessmentLatestResult;
                     const unlocked = isAssessmentUnlocked(selectedAssessment);
+
+                    if (!isSimulationAssessment) {
+                      return (
+                        <article className="w-full rounded-2xl border border-white/10 bg-slate-900/70 p-6 shadow-sm md:p-8">
+                          <div className="inline-flex items-center gap-2">
+                            <span className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-wider ${meta.chipClass}`}>
+                              {meta.label}
+                            </span>
+                            {!unlocked ? (
+                              <span className="inline-flex items-center gap-1 rounded-full border border-slate-400/30 bg-slate-700/30 px-2.5 py-1 text-[11px] font-semibold text-slate-300">
+                                <Lock size={12} />
+                                Locked
+                              </span>
+                            ) : null}
+                          </div>
+
+                          <h3 className="mt-4 text-3xl font-bold text-white">{selectedAssessment.title}</h3>
+                          <p className="mt-2 text-sm text-slate-300">{assessmentUnlockMessage(selectedAssessment)}</p>
+
+                          <div className="mt-6 grid gap-3 sm:grid-cols-3">
+                            <div className="rounded-lg border border-white/10 bg-white/5 p-4">
+                              <p className="text-[11px] uppercase tracking-wider text-slate-400">Passing</p>
+                              <p className="mt-1 text-2xl font-bold text-white">{selectedAssessment.passing_score}%</p>
+                            </div>
+                            <div className="rounded-lg border border-white/10 bg-white/5 p-4">
+                              <p className="text-[11px] uppercase tracking-wider text-slate-400">Timer</p>
+                              <p className="mt-1 text-2xl font-bold text-white">{selectedAssessment.time_limit_minutes}m</p>
+                            </div>
+                            <div className="rounded-lg border border-white/10 bg-white/5 p-4">
+                              <p className="text-[11px] uppercase tracking-wider text-slate-400">Attempts</p>
+                              <p className="mt-1 text-2xl font-bold text-white">{selectedAssessment.attempt_limit}</p>
+                            </div>
+                          </div>
+
+                          <div className="mt-6 flex flex-wrap items-center gap-3">
+                            <button
+                              type="button"
+                              disabled={
+                                !unlocked ||
+                                selectedAssessmentAttemptsRemaining <= 0 ||
+                                isQuizSubmitting ||
+                                isQuizLoading
+                              }
+                              onClick={() => void handleStartQuiz(selectedAssessment)}
+                              className="inline-flex items-center gap-2 rounded-lg bg-brand-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-brand-500 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              <CirclePlay size={16} />
+                              {selectedAssessmentAttemptCount > 0 ? 'Take Quiz Again' : 'Start Quiz'}
+                            </button>
+                            <p className="text-sm text-slate-300">
+                              Remaining attempts: {selectedAssessmentAttemptsRemaining}
+                            </p>
+                          </div>
+
+                          {latest ? (
+                            <p className="mt-4 text-xs text-slate-400">
+                              Latest attempt: {Number(latest.score)}% ({latest.passed ? 'Passed' : 'Failed'})
+                            </p>
+                          ) : (
+                            <p className="mt-4 text-xs text-slate-400">No attempts yet.</p>
+                          )}
+                        </article>
+                      );
+                    }
 
                     return (
                       <article className="h-full w-full overflow-hidden rounded-2xl border border-cyan-400/30 bg-slate-950 shadow-sm">
@@ -1287,7 +1687,7 @@ export function ModuleViewerPage() {
                               ) : null}
                             </div>
 
-                            <h3 className="mt-5 text-3xl font-bold text-white md:text-4xl">Ready for quiz</h3>
+                            <h3 className="mt-5 text-3xl font-bold text-white md:text-4xl">Ready for simulation</h3>
                             <p className="mt-3 max-w-2xl text-sm text-slate-300">{meta.description}</p>
                             <p className="mt-2 font-mono text-xs uppercase tracking-[0.12em] text-cyan-300/90">
                               {assessmentUnlockMessage(selectedAssessment)}
@@ -1356,45 +1756,7 @@ export function ModuleViewerPage() {
               </div>
             ) : !selectedLesson ? (
               <article className="rounded-xl border border-white/10 bg-slate-900/70 p-5 text-sm text-slate-300 shadow-sm">
-                Select a lesson, topic, or assessment from the sequence rail.
-              </article>
-            ) : selectedTopic ? (
-              <article
-                className={`min-h-[560px] border border-white/10 bg-slate-900/70 shadow-sm ${
-                  isLessonOrTopicView ? '-mt-px rounded-b-xl rounded-t-none' : 'rounded-xl'
-                }`}
-              >
-                  <div className="grid gap-8 p-5 xl:grid-cols-[minmax(0,1fr)_340px] xl:items-center">
-                    <div className="flex justify-center">
-                      {selectedTopicDisplayHtml ? (
-                        <div
-                          className="max-w-2xl space-y-3 text-sm leading-relaxed text-slate-200 [&_h1]:text-2xl [&_h1]:font-bold [&_h1]:text-white [&_h2]:text-xl [&_h2]:font-semibold [&_h2]:text-white [&_h3]:text-lg [&_h3]:font-semibold [&_h3]:text-white [&_li]:ml-5 [&_li]:list-disc [&_ol>li]:list-decimal [&_p]:text-slate-200"
-                          dangerouslySetInnerHTML={{ __html: selectedTopicDisplayHtml }}
-                        />
-                      ) : (
-                        <p className="text-sm text-slate-400">No topic content yet.</p>
-                      )}
-                    </div>
-                    <div className="flex items-center justify-center">
-                      {selectedTopicDisplayMediaUrl ? (
-                        isVideoMediaUrl(selectedTopicDisplayMediaUrl) ? (
-                          <video
-                            src={selectedTopicDisplayMediaUrl}
-                            controls
-                            className="max-h-[320px] w-full rounded-md bg-black/30 object-contain"
-                          />
-                        ) : (
-                          <img
-                            src={selectedTopicDisplayMediaUrl}
-                            alt={selectedTopic.title}
-                            className="max-h-[320px] w-full rounded-md bg-black/30 object-contain"
-                          />
-                        )
-                      ) : (
-                        <p className="text-sm text-slate-400">No media uploaded.</p>
-                      )}
-                    </div>
-                  </div>
+                Select a lesson or assessment from the sequence rail.
               </article>
             ) : (
               <section>
@@ -1403,47 +1765,146 @@ export function ModuleViewerPage() {
                       isLessonOrTopicView ? '-mt-px rounded-b-xl rounded-t-none' : 'rounded-xl'
                     }`}
                   >
-                    <div className="space-y-6 p-5">
-                      <div>
-                        {selectedLessonDisplayHtml ? (
-                          <div
-                            className="max-w-none space-y-3 text-sm leading-relaxed text-slate-200 [&_h1]:text-2xl [&_h1]:font-bold [&_h1]:text-white [&_h2]:text-xl [&_h2]:font-semibold [&_h2]:text-white [&_h3]:text-lg [&_h3]:font-semibold [&_h3]:text-white [&_li]:ml-5 [&_li]:list-disc [&_ol>li]:list-decimal [&_p]:text-slate-200"
-                            dangerouslySetInnerHTML={{ __html: selectedLessonDisplayHtml }}
-                          />
-                        ) : (
-                          <p className="text-sm text-slate-400">No lesson content yet.</p>
-                        )}
-                      </div>
+                    <div className="space-y-8 p-5">
+                      {selectedLessonStep?.kind === 'overview' ? (
+                        <>
+                          <div>
+                            {selectedLessonStep.html ? (
+                              <div
+                                className="max-w-none space-y-3 text-sm leading-relaxed text-slate-200 [&_h1]:text-2xl [&_h1]:font-bold [&_h1]:text-white [&_h2]:text-xl [&_h2]:font-semibold [&_h2]:text-white [&_h3]:text-lg [&_h3]:font-semibold [&_h3]:text-white [&_li]:ml-5 [&_li]:list-disc [&_ol>li]:list-decimal [&_p]:text-slate-200"
+                                dangerouslySetInnerHTML={{ __html: selectedLessonStep.html }}
+                              />
+                            ) : (
+                              <p className="text-sm text-slate-400">No lesson content yet.</p>
+                            )}
+                          </div>
 
-                      <div>
-                        {selectedLessonDisplayMediaUrl ? (
-                          isVideoMediaUrl(selectedLessonDisplayMediaUrl) ? (
-                            <video
-                              src={selectedLessonDisplayMediaUrl}
-                              controls
-                              className="max-h-[360px] w-full rounded-md border border-white/10 bg-black/30 object-contain"
-                            />
-                          ) : (
-                            <img
-                              src={selectedLessonDisplayMediaUrl}
-                              alt={selectedLesson.title}
-                              className="max-h-[360px] w-full rounded-md border border-white/10 bg-black/30 object-contain"
-                            />
-                          )
-                        ) : (
-                          <p className="text-sm text-slate-400">No media uploaded.</p>
-                        )}
-                      </div>
+                          <div>
+                            {selectedLessonStep.mediaUrl ? (
+                              isVideoMediaUrl(selectedLessonStep.mediaUrl) ? (
+                                <video
+                                  src={selectedLessonStep.mediaUrl}
+                                  controls
+                                  className="max-h-[360px] w-full rounded-md border border-white/10 bg-black/30 object-contain"
+                                />
+                              ) : (
+                                <img
+                                  src={selectedLessonStep.mediaUrl}
+                                  alt={selectedLesson.title}
+                                  className="max-h-[360px] w-full rounded-md border border-white/10 bg-black/30 object-contain"
+                                />
+                              )
+                            ) : (
+                              <p className="text-sm text-slate-400">No media uploaded.</p>
+                            )}
+                          </div>
+                        </>
+                      ) : selectedLessonStep?.kind === 'topic' ? (
+                        <section className="space-y-4">
+                          <div>
+                            <h4 className="text-lg font-semibold text-white">{selectedLessonStep.topic.title}</h4>
+                            {selectedLessonStep.topic.summary ? (
+                              <p className="mt-1 text-sm text-slate-300">{selectedLessonStep.topic.summary}</p>
+                            ) : null}
+                          </div>
 
-                      <div>
-                        <button
-                          disabled={!unlockedLessonIds.has(selectedLesson.id) || selectedLesson.completed || isMutating}
-                          onClick={() => void handleCompleteLesson(selectedLesson.id)}
-                          className="rounded-md bg-slate-900 px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
-                        >
-                          {selectedLesson.completed ? 'Lesson Completed' : 'Mark Lesson Complete'}
-                        </button>
-                      </div>
+                          {selectedLessonStep.sections.length === 0 ? (
+                            <p className="text-sm text-slate-400">No content in this topic yet.</p>
+                          ) : null}
+
+                          {selectedLessonStep.sections.map((section, sectionIndex) => {
+                            const sectionTemplate = getTopicTemplateFromBlock(section);
+                            const sectionHtmlRaw = (section.body_text ?? '').trim();
+                            const sectionHtml = sectionHtmlRaw ? sanitizeRichHtml(sectionHtmlRaw) : '';
+                            const sectionMediaUrl = normalizeUrlCandidate(section.content_url);
+                            const hasSectionMedia = Boolean(sectionMediaUrl);
+                            const isTemplateReversed = sectionTemplate === 'template-3';
+
+                            return (
+                              <section key={section.id} className="space-y-4">
+                                {sectionTemplate === 'template-2' ? (
+                                  <div className="space-y-4">
+                                    <div>
+                                      {sectionHtml ? (
+                                        <div
+                                          className="max-w-none space-y-3 text-sm leading-relaxed text-slate-200 [&_h1]:text-2xl [&_h1]:font-bold [&_h1]:text-white [&_h2]:text-xl [&_h2]:font-semibold [&_h2]:text-white [&_h3]:text-lg [&_h3]:font-semibold [&_h3]:text-white [&_li]:ml-5 [&_li]:list-disc [&_ol>li]:list-decimal [&_p]:text-slate-200"
+                                          dangerouslySetInnerHTML={{ __html: sectionHtml }}
+                                        />
+                                      ) : (
+                                        <p className="text-sm text-slate-400">No text content yet.</p>
+                                      )}
+                                    </div>
+                                    {hasSectionMedia ? (
+                                      <div>
+                                        {isVideoMediaUrl(sectionMediaUrl) ? (
+                                          <video
+                                            src={sectionMediaUrl}
+                                            controls
+                                            className="max-h-[360px] w-full rounded-md border border-white/10 bg-black/30 object-contain"
+                                          />
+                                        ) : (
+                                          <img
+                                            src={sectionMediaUrl}
+                                            alt={`${selectedLessonStep.topic.title} section ${sectionIndex + 1}`}
+                                            className="max-h-[360px] w-full rounded-md border border-white/10 bg-black/30 object-contain"
+                                          />
+                                        )}
+                                      </div>
+                                    ) : null}
+                                  </div>
+                                ) : hasSectionMedia ? (
+                                  <div
+                                    className={`grid gap-8 xl:items-start ${
+                                      isTemplateReversed
+                                        ? 'xl:grid-cols-[340px_minmax(0,1fr)]'
+                                        : 'xl:grid-cols-[minmax(0,1fr)_340px]'
+                                    }`}
+                                  >
+                                    <div className={isTemplateReversed ? 'xl:order-2' : ''}>
+                                      {sectionHtml ? (
+                                        <div
+                                          className="max-w-none space-y-3 text-sm leading-relaxed text-slate-200 [&_h1]:text-2xl [&_h1]:font-bold [&_h1]:text-white [&_h2]:text-xl [&_h2]:font-semibold [&_h2]:text-white [&_h3]:text-lg [&_h3]:font-semibold [&_h3]:text-white [&_li]:ml-5 [&_li]:list-disc [&_ol>li]:list-decimal [&_p]:text-slate-200"
+                                          dangerouslySetInnerHTML={{ __html: sectionHtml }}
+                                        />
+                                      ) : (
+                                        <p className="text-sm text-slate-400">No text content yet.</p>
+                                      )}
+                                    </div>
+                                    <div className={isTemplateReversed ? 'xl:order-1' : ''}>
+                                      {isVideoMediaUrl(sectionMediaUrl) ? (
+                                        <video
+                                          src={sectionMediaUrl}
+                                          controls
+                                          className="max-h-[320px] w-full rounded-md border border-white/10 bg-black/30 object-contain"
+                                        />
+                                      ) : (
+                                        <img
+                                          src={sectionMediaUrl}
+                                          alt={`${selectedLessonStep.topic.title} section ${sectionIndex + 1}`}
+                                          className="max-h-[320px] w-full rounded-md border border-white/10 bg-black/30 object-contain"
+                                        />
+                                      )}
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <div>
+                                    {sectionHtml ? (
+                                      <div
+                                        className="max-w-none space-y-3 text-sm leading-relaxed text-slate-200 [&_h1]:text-2xl [&_h1]:font-bold [&_h1]:text-white [&_h2]:text-xl [&_h2]:font-semibold [&_h2]:text-white [&_h3]:text-lg [&_h3]:font-semibold [&_h3]:text-white [&_li]:ml-5 [&_li]:list-disc [&_ol>li]:list-decimal [&_p]:text-slate-200"
+                                        dangerouslySetInnerHTML={{ __html: sectionHtml }}
+                                      />
+                                    ) : (
+                                      <p className="text-sm text-slate-400">No text content yet.</p>
+                                    )}
+                                  </div>
+                                )}
+                              </section>
+                            );
+                          })}
+                        </section>
+                      ) : (
+                        <p className="text-sm text-slate-400">No lesson content yet.</p>
+                      )}
                     </div>
                   </article>
                 </section>
@@ -1456,8 +1917,8 @@ export function ModuleViewerPage() {
                   <div className="grid items-center gap-3 md:grid-cols-[1fr_auto_1fr]">
                     <div className="flex">
                       <button
-                        disabled={!previousSequenceItem || !previousSequenceItem.unlocked || isQuizOngoing}
-                        onClick={() => goToSequenceItem(previousSequenceItem)}
+                        disabled={isPreviousNavigationDisabled}
+                        onClick={handlePreviousNavigation}
                         className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-white/20 bg-slate-900/80 px-4 py-2.5 text-sm font-semibold text-slate-100 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50 md:w-auto md:min-w-[136px]"
                       >
                         <ChevronLeft size={16} />
@@ -1467,13 +1928,13 @@ export function ModuleViewerPage() {
 
                     <div className="px-2 text-center">
                       <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Current Page</p>
-                      <p className="text-sm font-medium text-slate-200">{currentPositionLabel}</p>
+                      <p className="text-sm font-medium text-slate-200">{displayedPositionLabel}</p>
                     </div>
 
                     <div className="flex md:justify-end">
                       <button
-                        disabled={!nextSequenceItem || !nextSequenceItem.unlocked || isQuizOngoing}
-                        onClick={() => goToSequenceItem(nextSequenceItem)}
+                        disabled={isNextNavigationDisabled}
+                        onClick={handleNextNavigation}
                         className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-white/20 bg-slate-900/80 px-4 py-2.5 text-sm font-semibold text-slate-100 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50 md:w-auto md:min-w-[136px]"
                       >
                         Next
@@ -1482,7 +1943,17 @@ export function ModuleViewerPage() {
                     </div>
                   </div>
 
-                  {!isQuizOngoing && nextSequenceItem && !nextSequenceItem.unlocked ? (
+                  {!isQuizOngoing && isLessonStepMode && !selectedLessonCanAdvance ? (
+                    <p className="mt-2 text-center text-xs text-slate-400">
+                      Scroll to the end of this page to unlock Next.
+                    </p>
+                  ) : null}
+
+                  {!isQuizOngoing && !isLessonStepMode && nextSequenceItem && !nextSequenceItem.unlocked ? (
+                    <p className="mt-2 text-center text-xs text-slate-400">Next item is locked.</p>
+                  ) : null}
+
+                  {!isQuizOngoing && isLessonStepMode && !hasNextLessonStep && nextSequenceItem && !nextSequenceItem.unlocked ? (
                     <p className="mt-2 text-center text-xs text-slate-400">Next item is locked.</p>
                   ) : null}
 
@@ -1498,34 +1969,6 @@ export function ModuleViewerPage() {
         </div>
       ) : null}
 
-      {isSubmitConfirmOpen ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4">
-          <div className="w-full max-w-md rounded-xl border border-white/10 bg-slate-900/70 p-5 shadow-xl">
-            <h3 className="text-lg font-bold text-white">Submit Assessment?</h3>
-            <p className="mt-2 text-sm text-slate-300">
-              This is the last question. Confirm to submit all your answers and see your result.
-            </p>
-            <div className="mt-4 flex justify-end gap-2">
-              <button
-                type="button"
-                disabled={isQuizSubmitting}
-                onClick={() => setIsSubmitConfirmOpen(false)}
-                className="rounded-md border border-white/20 px-4 py-2 text-sm font-semibold text-slate-200 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                disabled={isQuizSubmitting}
-                onClick={() => void handleFinalizeQuiz()}
-                className="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {isQuizSubmitting ? 'Submitting...' : 'Confirm Submit'}
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
     </section>
   );
 }

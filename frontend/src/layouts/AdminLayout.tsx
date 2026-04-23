@@ -19,7 +19,7 @@ export function AdminLayout() {
   };
 
   return (
-    <div className="admin-theme user-theme min-h-screen bg-dark-bg text-white">
+    <div className="min-h-screen bg-dark-bg text-slate-100">
       <div className="landing-gradient pointer-events-none fixed inset-0" />
 
       <div className="relative z-10 flex min-h-screen">

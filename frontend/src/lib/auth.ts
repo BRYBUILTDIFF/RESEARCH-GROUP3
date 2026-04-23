@@ -8,6 +8,10 @@ export function saveAuthSession(payload: LoginResponse) {
   localStorage.setItem(USER_KEY, JSON.stringify(payload.user));
 }
 
+export function saveCurrentUser(user: AuthUser) {
+  localStorage.setItem(USER_KEY, JSON.stringify(user));
+}
+
 export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);
 }

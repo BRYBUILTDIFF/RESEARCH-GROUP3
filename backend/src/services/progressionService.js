@@ -145,24 +145,47 @@ export async function ensureQuizUnlocked({ enrollmentId, quizId }) {
     throw new AppError('Quiz does not belong to enrollment module.', 400);
   }
 
-  const lessonsTotalResult = await pool.query(
-    'SELECT COUNT(*)::INT AS total FROM lessons WHERE module_id = $1 AND is_published = TRUE;',
-    [quiz.module_id]
-  );
-  const lessonsCompletedResult = await pool.query(
-    `
-      SELECT COUNT(*)::INT AS completed
-      FROM progress p
-      JOIN lessons l ON l.id = p.lesson_id
-      WHERE p.enrollment_id = $1
-        AND l.module_id = $2
-        AND p.completed = TRUE;
-    `,
-    [enrollmentId, quiz.module_id]
-  );
+  if (quiz.stage !== 'pre_test') {
+    if (quiz.stage === 'post_test') {
+      if (!quiz.lesson_id) {
+        throw new AppError('Post-test is not mapped to a lesson.', 400);
+      }
 
-  if (lessonsCompletedResult.rows[0].completed < lessonsTotalResult.rows[0].total) {
-    throw new AppError('Complete all lessons first. Quizzes unlock after lessons.', 400);
+      const lessonProgressResult = await pool.query(
+        `
+          SELECT p.completed
+          FROM progress p
+          WHERE p.enrollment_id = $1
+            AND p.lesson_id = $2
+          LIMIT 1;
+        `,
+        [enrollmentId, quiz.lesson_id]
+      );
+
+      if (lessonProgressResult.rowCount === 0 || !lessonProgressResult.rows[0].completed) {
+        throw new AppError('Complete the lesson first to unlock this Post-Test.', 400);
+      }
+    } else {
+      const lessonsTotalResult = await pool.query(
+        'SELECT COUNT(*)::INT AS total FROM lessons WHERE module_id = $1 AND is_published = TRUE;',
+        [quiz.module_id]
+      );
+      const lessonsCompletedResult = await pool.query(
+        `
+          SELECT COUNT(*)::INT AS completed
+          FROM progress p
+          JOIN lessons l ON l.id = p.lesson_id
+          WHERE p.enrollment_id = $1
+            AND l.module_id = $2
+            AND p.completed = TRUE;
+        `,
+        [enrollmentId, quiz.module_id]
+      );
+
+      if (lessonsCompletedResult.rows[0].completed < lessonsTotalResult.rows[0].total) {
+        throw new AppError('Complete all lessons first. Quizzes unlock after lessons.', 400);
+      }
+    }
   }
 
   if (quiz.quiz_type === 'final_exam') {

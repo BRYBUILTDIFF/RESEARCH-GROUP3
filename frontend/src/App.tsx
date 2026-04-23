@@ -13,6 +13,7 @@ import { ModuleViewerPage } from './pages/user/ModuleViewerPage';
 import { QuizPage } from './pages/user/QuizPage';
 import { UserDashboardPage } from './pages/user/UserDashboardPage';
 import { UserModulesPage } from './pages/user/UserModulesPage';
+import { UserProfilePage } from './pages/user/UserProfilePage';
 import { UserProgressPage } from './pages/user/UserProgressPage';
 
 export default function App() {
@@ -51,6 +52,7 @@ export default function App() {
         <Route path="modules/:moduleId" element={<ModuleViewerPage />} />
         <Route path="quizzes/:quizId" element={<QuizPage />} />
         <Route path="progress" element={<UserProgressPage />} />
+        <Route path="profile" element={<UserProfilePage />} />
         <Route index element={<Navigate to="/user/dashboard" replace />} />
       </Route>
 
