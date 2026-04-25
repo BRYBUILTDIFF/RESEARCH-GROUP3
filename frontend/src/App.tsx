@@ -1,4 +1,5 @@
-import { Navigate, Route, Routes } from 'react-router-dom';
+import { useEffect } from 'react';
+import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { AdminLayout } from './layouts/AdminLayout';
 import { UserLayout } from './layouts/UserLayout';
@@ -15,8 +16,17 @@ import { UserDashboardPage } from './pages/user/UserDashboardPage';
 import { UserModulesPage } from './pages/user/UserModulesPage';
 import { UserProfilePage } from './pages/user/UserProfilePage';
 import { UserProgressPage } from './pages/user/UserProgressPage';
+import { clearTheme } from './lib/theme';
 
 export default function App() {
+  const location = useLocation();
+
+  useEffect(() => {
+    if (!location.pathname.startsWith('/user')) {
+      clearTheme();
+    }
+  }, [location.pathname]);
+
   return (
     <Routes>
       <Route path="/" element={<LandingPage />} />

@@ -118,6 +118,12 @@ export async function updateModule(
   });
 }
 
+export async function deleteModule(moduleId: number) {
+  await apiRequest<{}>(`/api/modules/${moduleId}`, {
+    method: 'DELETE',
+  });
+}
+
 export async function getLessons(moduleId: number): Promise<LessonSummary[]> {
   const data = await apiRequest<{ lessons: LessonSummary[] }>(`/api/lessons?moduleId=${moduleId}`);
   return data.lessons;
@@ -333,7 +339,7 @@ export async function getQuizQuestions(quizId: number): Promise<QuizQuestionRow[
 
 export async function createQuizQuestion(
   quizId: number,
-  payload: { prompt: string; points?: number; sortOrder?: number }
+  payload: { prompt: string; questionType?: 'single_choice' | 'multiple_choice'; points?: number; sortOrder?: number }
 ): Promise<QuizQuestionRow> {
   const data = await apiRequest<{ question: QuizQuestionRow }>(`/api/quizzes/${quizId}/questions`, {
     method: 'POST',
@@ -344,7 +350,7 @@ export async function createQuizQuestion(
 
 export async function updateQuizQuestion(
   questionId: number,
-  payload: Partial<{ prompt: string; points: number; sortOrder: number }>
+  payload: Partial<{ prompt: string; questionType: 'single_choice' | 'multiple_choice'; points: number; sortOrder: number }>
 ): Promise<QuizQuestionRow> {
   const data = await apiRequest<{ question: QuizQuestionRow }>(`/api/quizzes/questions/${questionId}`, {
     method: 'PUT',

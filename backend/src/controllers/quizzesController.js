@@ -185,7 +185,8 @@ export const listQuizQuestions = asyncHandler(async (req, res) => {
 
 export const createQuizQuestion = asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const { prompt, points = 1, sortOrder } = req.body;
+  const { prompt, questionType = 'single_choice', points = 1, sortOrder } = req.body;
+  const normalizedQuestionType = questionType === 'multiple_choice' ? 'multiple_choice' : 'single_choice';
   if (!prompt) {
     throw new AppError('prompt is required.', 400);
   }
@@ -206,28 +207,31 @@ export const createQuizQuestion = asyncHandler(async (req, res) => {
   const inserted = await pool.query(
     `
       INSERT INTO questions (quiz_id, prompt, question_type, points, sort_order)
-      VALUES ($1, $2, 'single_choice', $3, $4)
+      VALUES ($1, $2, $3, $4, $5)
       RETURNING id, quiz_id, prompt, question_type, points, sort_order;
     `,
-    [id, prompt, points, finalSortOrder]
+    [id, prompt, normalizedQuestionType, points, finalSortOrder]
   );
   res.status(201).json({ question: inserted.rows[0] });
 });
 
 export const updateQuizQuestion = asyncHandler(async (req, res) => {
   const { questionId } = req.params;
-  const { prompt, points, sortOrder } = req.body;
+  const { prompt, questionType, points, sortOrder } = req.body;
+  const normalizedQuestionType =
+    typeof questionType === 'string' ? (questionType === 'multiple_choice' ? 'multiple_choice' : 'single_choice') : null;
   const updated = await pool.query(
     `
       UPDATE questions
       SET
         prompt = COALESCE($2, prompt),
-        points = COALESCE($3, points),
-        sort_order = COALESCE($4, sort_order)
+        question_type = COALESCE($3, question_type),
+        points = COALESCE($4, points),
+        sort_order = COALESCE($5, sort_order)
       WHERE id = $1
       RETURNING id, quiz_id, prompt, question_type, points, sort_order;
     `,
-    [questionId, prompt ?? null, points ?? null, sortOrder ?? null]
+    [questionId, prompt ?? null, normalizedQuestionType, points ?? null, sortOrder ?? null]
   );
   if (updated.rowCount === 0) {
     throw new AppError('Question not found.', 404);

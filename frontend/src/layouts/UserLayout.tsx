@@ -53,6 +53,10 @@ export function UserLayout() {
   }, []);
 
   useEffect(() => {
+    setTheme(themeMode);
+  }, [themeMode]);
+
+  useEffect(() => {
     const syncProfile = async () => {
       try {
         const profile = await getMyProfile();

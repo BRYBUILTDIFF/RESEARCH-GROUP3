@@ -44,6 +44,24 @@ function normalizeUrlCandidate(value: string | null | undefined) {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+function parseLessonOverviewMediaUrls(value: string | null | undefined): string[] {
+  const normalized = normalizeUrlCandidate(value);
+  if (!normalized) return [];
+
+  try {
+    const parsed = JSON.parse(normalized) as unknown;
+    if (Array.isArray(parsed)) {
+      return parsed
+        .map((item) => (typeof item === 'string' ? normalizeUrlCandidate(item) : null))
+        .filter((item): item is string => Boolean(item));
+    }
+  } catch {
+    // Backward compatibility for legacy single URL value.
+  }
+
+  return [normalized];
+}
+
 function sanitizeRichHtml(input: string) {
   return input
     .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, '')
@@ -99,7 +117,7 @@ type LessonViewStep =
       kind: 'overview';
       title: string;
       html: string;
-      mediaUrl: string | null;
+      mediaUrls: string[];
     }
   | {
       key: string;
@@ -753,9 +771,14 @@ export function ModuleViewerPage() {
   const selectedLessonDisplayHtml = selectedLessonDisplayHtmlRaw
     ? sanitizeRichHtml(selectedLessonDisplayHtmlRaw)
     : '';
-  const selectedLessonDisplayMediaUrl =
-    normalizeUrlCandidate(selectedLesson?.overview_image_url) ??
-    normalizeUrlCandidate(selectedLessonFallbackContent?.content_url);
+  const selectedLessonDisplayMediaUrlsFromOverview = parseLessonOverviewMediaUrls(selectedLesson?.overview_image_url);
+  const selectedLessonDisplayMediaUrls =
+    selectedLessonDisplayMediaUrlsFromOverview.length > 0
+      ? selectedLessonDisplayMediaUrlsFromOverview
+      : (() => {
+          const fallbackMedia = normalizeUrlCandidate(selectedLessonFallbackContent?.content_url);
+          return fallbackMedia ? [fallbackMedia] : [];
+        })();
 
   const selectedLessonSteps = useMemo<LessonViewStep[]>(() => {
     if (!selectedLesson) return [];
@@ -766,7 +789,7 @@ export function ModuleViewerPage() {
         kind: 'overview',
         title: selectedLesson.title,
         html: selectedLessonDisplayHtml,
-        mediaUrl: selectedLessonDisplayMediaUrl,
+        mediaUrls: selectedLessonDisplayMediaUrls,
       },
     ];
 
@@ -783,7 +806,7 @@ export function ModuleViewerPage() {
   }, [
     selectedLesson,
     selectedLessonDisplayHtml,
-    selectedLessonDisplayMediaUrl,
+    selectedLessonDisplayMediaUrls,
     selectedLessonTopicGroups,
   ]);
 
@@ -1780,20 +1803,26 @@ export function ModuleViewerPage() {
                           </div>
 
                           <div>
-                            {selectedLessonStep.mediaUrl ? (
-                              isVideoMediaUrl(selectedLessonStep.mediaUrl) ? (
-                                <video
-                                  src={selectedLessonStep.mediaUrl}
-                                  controls
-                                  className="max-h-[360px] w-full rounded-md border border-white/10 bg-black/30 object-contain"
-                                />
-                              ) : (
-                                <img
-                                  src={selectedLessonStep.mediaUrl}
-                                  alt={selectedLesson.title}
-                                  className="max-h-[360px] w-full rounded-md border border-white/10 bg-black/30 object-contain"
-                                />
-                              )
+                            {selectedLessonStep.mediaUrls.length > 0 ? (
+                              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                                {selectedLessonStep.mediaUrls.map((mediaUrl, mediaIndex) =>
+                                  isVideoMediaUrl(mediaUrl) ? (
+                                    <video
+                                      key={`${mediaUrl}-${mediaIndex}`}
+                                      src={mediaUrl}
+                                      controls
+                                      className="h-[220px] w-full rounded-md border border-white/10 bg-black/30 object-contain"
+                                    />
+                                  ) : (
+                                    <img
+                                      key={`${mediaUrl}-${mediaIndex}`}
+                                      src={mediaUrl}
+                                      alt={`${selectedLesson.title} media ${mediaIndex + 1}`}
+                                      className="h-[220px] w-full rounded-md border border-white/10 bg-black/30 object-contain"
+                                    />
+                                  )
+                                )}
+                              </div>
                             ) : (
                               <p className="text-sm text-slate-400">No media uploaded.</p>
                             )}

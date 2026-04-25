@@ -1,5 +1,6 @@
 
 import { ChangeEvent, FormEvent, MouseEvent as ReactMouseEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   AlignCenter,
   AlignJustify,
@@ -11,6 +12,7 @@ import {
   Eye,
   List,
   ListOrdered,
+  Pencil,
   Plus,
   Search,
   Trash2,
@@ -25,6 +27,7 @@ import {
   createQuiz,
   createQuizQuestion,
   createTopic,
+  deleteModule,
   deleteLesson,
   deleteLessonContent,
   deleteQuestionAnswer,
@@ -53,6 +56,7 @@ import type {
 } from '../../types/lms';
 
 type BuilderSelection =
+  | { view: 'builderHome' }
   | { view: 'preTest' }
   | { view: 'lesson'; lessonId: number }
   | { view: 'topic'; lessonId: number; topicId: number }
@@ -60,6 +64,7 @@ type BuilderSelection =
   | { view: 'finalExam' };
 
 type AddType = 'preTest' | 'lesson' | 'topic' | 'postTest';
+type BuilderQuestionType = 'single_choice' | 'multiple_choice';
 
 type ModuleForm = {
   title: string;
@@ -89,6 +94,11 @@ const defaultModuleForm: ModuleForm = {
   isActive: false,
   isLocked: false,
 };
+const MAX_LESSON_MEDIA_ITEMS = 3;
+
+function normalizeQuestionType(value: string | null | undefined): BuilderQuestionType {
+  return value === 'multiple_choice' ? 'multiple_choice' : 'single_choice';
+}
 
 const editorToolbarGroupClass =
   'inline-flex items-center gap-1 rounded-md border border-white/10 bg-slate-950/60 px-1 py-1';
@@ -99,6 +109,7 @@ const editorToolbarIconButtonClass =
 const editorToolbarSelectClass = 'h-7 rounded border border-white/15 bg-slate-900 px-2 text-xs text-slate-200';
 
 function selectionKey(selection: BuilderSelection): string {
+  if (selection.view === 'builderHome') return 'builderHome';
   if (selection.view === 'lesson') return `lesson:${selection.lessonId}`;
   if (selection.view === 'topic') return `topic:${selection.lessonId}:${selection.topicId}`;
   if (selection.view === 'postTest') return `post:${selection.lessonId}`;
@@ -133,9 +144,55 @@ function sanitizeRichHtml(input: string) {
     .replace(/\son\w+='[^']*'/gi, '');
 }
 
+function normalizeUrlCandidate(value: string | null | undefined) {
+  const trimmed = (value ?? '').trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function parseLessonOverviewMediaUrls(value: string | null | undefined): string[] {
+  const normalized = normalizeUrlCandidate(value);
+  if (!normalized) return [];
+
+  try {
+    const parsed = JSON.parse(normalized) as unknown;
+    if (Array.isArray(parsed)) {
+      return parsed
+        .map((item) => (typeof item === 'string' ? normalizeUrlCandidate(item) : null))
+        .filter((item): item is string => Boolean(item));
+    }
+  } catch {
+    // Backward compatibility for legacy single URL value.
+  }
+
+  return [normalized];
+}
+
+function serializeLessonOverviewMediaUrls(urls: string[]): string {
+  const cleaned = urls
+    .map((url) => normalizeUrlCandidate(url))
+    .filter((url): url is string => Boolean(url));
+
+  if (cleaned.length === 0) return '';
+  if (cleaned.length === 1) return cleaned[0];
+  return JSON.stringify(cleaned);
+}
+
+function getLessonOverviewMediaUrls(lesson: LessonSummary | null | undefined): string[] {
+  return parseLessonOverviewMediaUrls(lesson?.overview_image_url ?? null);
+}
+
 function isVideoMediaUrl(url: string | null | undefined) {
   if (!url) return false;
   return /^(data:video\/|https?:\/\/.*\.(mp4|webm|ogg|mov)(\?.*)?$)/i.test(url);
+}
+
+function isMediaContentType(value: string | null | undefined): boolean {
+  return value === 'image' || value === 'video';
+}
+
+function getRenderableMediaUrl(block: LessonContentBlock | null | undefined): string | null {
+  if (!block || !isMediaContentType(block.content_type)) return null;
+  return normalizeUrlCandidate(block.content_url);
 }
 
 type TopicLayoutTemplate = 'template-1' | 'template-2' | 'template-3';
@@ -157,10 +214,19 @@ function getTopicTemplateFromBlock(block: LessonContentBlock | null | undefined)
   return 'template-1';
 }
 
+function StatusPill({ text, className }: { text: string; className: string }) {
+  return (
+    <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] ${className}`}>
+      {text}
+    </span>
+  );
+}
+
 export function AdminModulesPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [modules, setModules] = useState<ModuleSummary[]>([]);
   const [builder, setBuilder] = useState<ModuleBuilderPayload | null>(null);
-  const [selection, setSelection] = useState<BuilderSelection>({ view: 'preTest' });
+  const [selection, setSelection] = useState<BuilderSelection>({ view: 'builderHome' });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
@@ -178,13 +244,14 @@ export function AdminModulesPage() {
   const [addTitle, setAddTitle] = useState('');
   const [addLessonId, setAddLessonId] = useState<number | null>(null);
 
-  const [previewSelection, setPreviewSelection] = useState<BuilderSelection>({ view: 'preTest' });
+  const [previewSelection, setPreviewSelection] = useState<BuilderSelection>({ view: 'builderHome' });
   const lessonContentEditorRef = useRef<HTMLDivElement | null>(null);
   const topicSectionEditorRefs = useRef<Record<number, HTMLDivElement | null>>({});
   const lessonSelectionRangeRef = useRef<Range | null>(null);
   const topicSelectionRangeRefs = useRef<Record<number, Range | null>>({});
   const createThumbnailInputRef = useRef<HTMLInputElement | null>(null);
   const editThumbnailInputRef = useRef<HTMLInputElement | null>(null);
+  const autoLoadBuilderModuleIdRef = useRef<number | null>(null);
   const [activeTopicSectionId, setActiveTopicSectionId] = useState<number | null>(null);
 
   const run = async (task: () => Promise<void>) => {
@@ -209,15 +276,16 @@ export function AdminModulesPage() {
     if (findPreQuiz(payload.quizzes)) return { view: 'preTest' };
     if (sortedLessons.length > 0) return { view: 'lesson', lessonId: sortedLessons[0].id };
     if (findFinalQuiz(payload.quizzes)) return { view: 'finalExam' };
-    return { view: 'preTest' };
+    return { view: 'builderHome' };
   };
 
   const selectionExists = (payload: ModuleBuilderPayload, target: BuilderSelection) => {
-    if (target.view === 'preTest') return true;
-    if (target.view === 'finalExam') return true;
+    if (target.view === 'builderHome') return true;
+    if (target.view === 'preTest') return Boolean(findPreQuiz(payload.quizzes));
+    if (target.view === 'finalExam') return Boolean(findFinalQuiz(payload.quizzes));
     if (target.view === 'lesson') return payload.lessons.some((lesson) => lesson.id === target.lessonId);
     if (target.view === 'topic') return payload.topics.some((topic) => topic.id === target.topicId && topic.lesson_id === target.lessonId);
-    return payload.lessons.some((lesson) => lesson.id === target.lessonId);
+    return payload.quizzes.some((quiz) => quiz.stage === 'post_test' && quiz.lesson_id === target.lessonId);
   };
 
   const loadBuilder = async (moduleId: number, preferredSelection?: BuilderSelection | null) => {
@@ -235,6 +303,38 @@ export function AdminModulesPage() {
       await loadModules();
     });
   }, []);
+
+  useEffect(() => {
+    const moduleIdParam = Number(searchParams.get('moduleId'));
+    const hasValidModuleParam = Number.isInteger(moduleIdParam) && moduleIdParam > 0;
+
+    if (builder) {
+      const hasBuilderParam = searchParams.get('builder') === '1';
+      const hasCurrentModuleParam = searchParams.get('moduleId') === String(builder.module.id);
+      if (!hasBuilderParam || !hasCurrentModuleParam) {
+        const nextParams = new URLSearchParams(searchParams);
+        nextParams.set('builder', '1');
+        nextParams.set('moduleId', String(builder.module.id));
+        setSearchParams(nextParams, { replace: true });
+      }
+      return;
+    }
+
+    if (!hasValidModuleParam) {
+      if (searchParams.get('builder') === '1') {
+        const nextParams = new URLSearchParams(searchParams);
+        nextParams.delete('builder');
+        setSearchParams(nextParams, { replace: true });
+      }
+      return;
+    }
+
+    if (autoLoadBuilderModuleIdRef.current === moduleIdParam) return;
+    autoLoadBuilderModuleIdRef.current = moduleIdParam;
+    void run(async () => {
+      await loadBuilder(moduleIdParam);
+    });
+  }, [builder, searchParams, setSearchParams]);
 
   const filteredModules = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -305,6 +405,7 @@ export function AdminModulesPage() {
   const currentLessonId =
     selection.view === 'lesson' || selection.view === 'topic' || selection.view === 'postTest' ? selection.lessonId : null;
   const currentLesson = currentLessonId ? lessons.find((lesson) => lesson.id === currentLessonId) ?? null : null;
+  const currentLessonMediaUrls = getLessonOverviewMediaUrls(currentLesson);
   const currentTopicId = selection.view === 'topic' ? selection.topicId : null;
   const currentTopic = currentTopicId ? builder?.topics.find((topic) => topic.id === currentTopicId) ?? null : null;
 
@@ -339,7 +440,10 @@ export function AdminModulesPage() {
   }, [selection.view, currentTopic?.id, selectedTopicSections]);
 
   const sequence = useMemo(() => {
-    const list: Array<{ label: string; selection: BuilderSelection }> = [{ label: 'Pre-Test', selection: { view: 'preTest' } }];
+    const list: Array<{ label: string; selection: BuilderSelection }> = [];
+    if (preQuiz) {
+      list.push({ label: 'Pre-Test', selection: { view: 'preTest' } });
+    }
     for (const lesson of lessons) {
       list.push({ label: `Lesson ${lesson.sequence_no}: ${lesson.title}`, selection: { view: 'lesson', lessonId: lesson.id } });
       const topics = topicsByLesson.get(lesson.id) ?? [];
@@ -349,14 +453,22 @@ export function AdminModulesPage() {
           selection: { view: 'topic', lessonId: lesson.id, topicId: topic.id },
         });
       }
-      list.push({ label: `Lesson ${lesson.sequence_no} Post-Test`, selection: { view: 'postTest', lessonId: lesson.id } });
+      if (postQuizByLesson.get(lesson.id)) {
+        list.push({ label: `Lesson ${lesson.sequence_no} Post-Test`, selection: { view: 'postTest', lessonId: lesson.id } });
+      }
     }
-    list.push({ label: 'Final Exam', selection: { view: 'finalExam' } });
+    if (finalQuiz) {
+      list.push({ label: 'Final Exam', selection: { view: 'finalExam' } });
+    }
     return list;
-  }, [lessons, topicsByLesson]);
+  }, [lessons, topicsByLesson, preQuiz, postQuizByLesson, finalQuiz]);
 
   const selectionIndex = sequence.findIndex((item) => sameSelection(item.selection, selection));
   const previewIndex = sequence.findIndex((item) => sameSelection(item.selection, previewSelection));
+  const totalPages = sequence.length;
+  const currentPageNumber = selectionIndex >= 0 ? selectionIndex + 1 : 0;
+  const currentBuilderLabel = sequence[selectionIndex]?.label ?? 'Builder Home';
+  const builderProgressPercent = totalPages > 0 ? Math.max(5, Math.round((currentPageNumber / totalPages) * 100)) : 0;
 
   const updateLessonLocal = (lessonId: number, patch: Partial<LessonSummary>) => {
     setBuilder((prev) => {
@@ -403,6 +515,38 @@ export function AdminModulesPage() {
     });
   };
 
+  const setQuestionTypeLocally = (questionId: number, questionType: BuilderQuestionType) => {
+    setBuilder((prev) => {
+      if (!prev) return prev;
+
+      const nextQuestions = prev.questions.map((question) =>
+        question.id === questionId ? { ...question, question_type: questionType } : question
+      );
+
+      if (questionType !== 'single_choice') {
+        return { ...prev, questions: nextQuestions };
+      }
+
+      const currentAnswers = prev.answers
+        .filter((answer) => answer.question_id === questionId)
+        .sort((a, b) => a.sort_order - b.sort_order || a.id - b.id);
+      const firstCorrectId = currentAnswers.find((answer) => Boolean(answer.is_correct))?.id ?? currentAnswers[0]?.id ?? null;
+
+      if (!firstCorrectId) {
+        return { ...prev, questions: nextQuestions };
+      }
+
+      return {
+        ...prev,
+        questions: nextQuestions,
+        answers: prev.answers.map((answer) => {
+          if (answer.question_id !== questionId) return answer;
+          return { ...answer, is_correct: answer.id === firstCorrectId };
+        }),
+      };
+    });
+  };
+
   const openModuleEdit = (module: ModuleSummary) => {
     setEditModuleId(module.id);
     setEditForm({
@@ -414,6 +558,25 @@ export function AdminModulesPage() {
       isLocked: module.is_locked,
     });
     setShowEditModal(true);
+  };
+
+  const handleDeleteModule = async (module: ModuleSummary) => {
+    const confirmed = window.confirm(`Delete module "${module.title}"? This cannot be undone.`);
+    if (!confirmed) return;
+    await run(async () => {
+      await deleteModule(module.id);
+      await loadModules();
+    });
+  };
+
+  const closeBuilderView = () => {
+    setBuilder(null);
+    setSelection({ view: 'builderHome' });
+    autoLoadBuilderModuleIdRef.current = null;
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.delete('builder');
+    nextParams.delete('moduleId');
+    setSearchParams(nextParams, { replace: true });
   };
 
   const handleCreateModule = async (event: FormEvent) => {
@@ -573,6 +736,7 @@ export function AdminModulesPage() {
   const saveCurrentLesson = async () => {
     if (!builder || !currentLesson) return;
     const lessonContentHtml = sanitizeRichHtml(lessonContentEditorRef.current?.innerHTML ?? currentLesson.overview_text ?? '');
+    const normalizedLessonMedia = serializeLessonOverviewMediaUrls(getLessonOverviewMediaUrls(currentLesson));
     updateLessonLocal(currentLesson.id, { overview_text: lessonContentHtml });
     await run(async () => {
       await updateLesson(currentLesson.id, {
@@ -580,7 +744,7 @@ export function AdminModulesPage() {
         summary: currentLesson.summary,
         estimatedMinutes: currentLesson.estimated_minutes,
         overviewText: lessonContentHtml,
-        overviewImageUrl: currentLesson.overview_image_url ?? '',
+        overviewImageUrl: normalizedLessonMedia,
         isPublished: currentLesson.is_published ?? true,
       });
       await loadBuilder(builder.module.id, { view: 'lesson', lessonId: currentLesson.id });
@@ -675,6 +839,7 @@ export function AdminModulesPage() {
       }
       const created = await createQuizQuestion(currentQuiz.id, {
         prompt: `New Question ${nextQuestionNumber}`,
+        questionType: 'single_choice',
         points: 1,
         sortOrder: nextSortOrder,
       });
@@ -689,29 +854,50 @@ export function AdminModulesPage() {
     });
   };
 
-  const saveQuestion = async (question: QuizQuestionRow) => {
-    if (!builder) return;
-    const answers = answersByQuestion.get(question.id) ?? [];
-    if (!answers.length) {
-      setError('Each question needs at least one choice.');
-      return;
+  const saveAllQuestions = async () => {
+    if (!builder || !currentQuiz) return;
+    const questions = selectedQuestions;
+    if (questions.length === 0) return;
+
+    for (const question of questions) {
+      const answers = answersByQuestion.get(question.id) ?? [];
+      if (!answers.length) {
+        setError('Each question needs at least one choice.');
+        return;
+      }
+      if (!answers.some((answer) => Boolean(answer.is_correct))) {
+        setError('At least one correct choice must be selected for every question.');
+        return;
+      }
     }
-    if (!answers.some((answer) => Boolean(answer.is_correct))) {
-      setError('Mark one correct choice before saving the question.');
-      return;
-    }
+
     await run(async () => {
-      await updateQuizQuestion(question.id, { prompt: question.prompt, points: question.points, sortOrder: question.sort_order });
       await Promise.all(
-        answers.map((answer) =>
-          updateQuestionAnswer(question.id, answer.id, {
-            answerText: answer.answer_text,
-            isCorrect: Boolean(answer.is_correct),
-            explanation: answer.explanation ?? '',
-            sortOrder: answer.sort_order,
+        questions.map((question) =>
+          updateQuizQuestion(question.id, {
+            prompt: question.prompt,
+            questionType: normalizeQuestionType(question.question_type),
+            points: question.points,
+            sortOrder: question.sort_order,
           })
         )
       );
+
+      const answerUpdates: Promise<unknown>[] = [];
+      for (const question of questions) {
+        const answers = answersByQuestion.get(question.id) ?? [];
+        for (const answer of answers) {
+          answerUpdates.push(
+            updateQuestionAnswer(question.id, answer.id, {
+              answerText: answer.answer_text,
+              isCorrect: Boolean(answer.is_correct),
+              explanation: answer.explanation ?? '',
+              sortOrder: answer.sort_order,
+            })
+          );
+        }
+      }
+      await Promise.all(answerUpdates);
       await loadBuilder(builder.module.id, selection);
     });
   };
@@ -724,14 +910,26 @@ export function AdminModulesPage() {
     });
   };
 
-  const setSingleCorrectAnswerLocally = (questionId: number, answerId: number) => {
+  const toggleCorrectAnswerLocally = (questionId: number, answerId: number) => {
     setBuilder((prev) => {
       if (!prev) return prev;
+      const questionType = normalizeQuestionType(prev.questions.find((question) => question.id === questionId)?.question_type);
+
+      if (questionType === 'single_choice') {
+        return {
+          ...prev,
+          answers: prev.answers.map((answer) => {
+            if (answer.question_id !== questionId) return answer;
+            return { ...answer, is_correct: answer.id === answerId };
+          }),
+        };
+      }
+
       return {
         ...prev,
         answers: prev.answers.map((answer) => {
-          if (answer.question_id !== questionId) return answer;
-          return { ...answer, is_correct: answer.id === answerId };
+          if (answer.question_id !== questionId || answer.id !== answerId) return answer;
+          return { ...answer, is_correct: !Boolean(answer.is_correct) };
         }),
       };
     });
@@ -764,10 +962,27 @@ export function AdminModulesPage() {
     });
   };
 
-  const uploadLessonMedia = async (file: File) => {
+  const addLessonMedia = async (file: File) => {
     if (!currentLesson) return;
+    const currentMediaUrls = getLessonOverviewMediaUrls(currentLesson);
+    if (currentMediaUrls.length >= MAX_LESSON_MEDIA_ITEMS) {
+      throw new Error(`You can upload up to ${MAX_LESSON_MEDIA_ITEMS} lesson media files only.`);
+    }
     const dataUrl = await toDataUrl(file);
-    updateLessonLocal(currentLesson.id, { overview_image_url: dataUrl });
+    const nextMediaUrls = [...currentMediaUrls, dataUrl].slice(0, MAX_LESSON_MEDIA_ITEMS);
+    updateLessonLocal(currentLesson.id, {
+      overview_image_url: serializeLessonOverviewMediaUrls(nextMediaUrls),
+    });
+  };
+
+  const removeLessonMediaAt = (mediaIndex: number) => {
+    if (!currentLesson) return;
+    const currentMediaUrls = getLessonOverviewMediaUrls(currentLesson);
+    if (mediaIndex < 0 || mediaIndex >= currentMediaUrls.length) return;
+    const nextMediaUrls = currentMediaUrls.filter((_, index) => index !== mediaIndex);
+    updateLessonLocal(currentLesson.id, {
+      overview_image_url: serializeLessonOverviewMediaUrls(nextMediaUrls),
+    });
   };
 
   const uploadTopicMedia = async (section: LessonContentBlock, file: File, sectionIndex: number) => {
@@ -854,6 +1069,42 @@ export function AdminModulesPage() {
     await run(async () => {
       await deleteLessonContent(sectionId);
       await loadBuilder(builder.module.id, { view: 'topic', lessonId: currentTopic.lesson_id, topicId: currentTopic.id });
+    });
+  };
+
+  const moveTopicSectionLocally = (sectionId: number, direction: 'up' | 'down') => {
+    if (!currentTopic) return;
+
+    setBuilder((prev) => {
+      if (!prev) return prev;
+
+      const topicSections = prev.content
+        .filter((content) => content.topic_id === currentTopic.id)
+        .sort((a, b) => a.sort_order - b.sort_order || a.id - b.id);
+
+      const currentIndex = topicSections.findIndex((section) => section.id === sectionId);
+      if (currentIndex === -1) return prev;
+
+      const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
+      if (targetIndex < 0 || targetIndex >= topicSections.length) return prev;
+
+      const reordered = [...topicSections];
+      const [movedSection] = reordered.splice(currentIndex, 1);
+      reordered.splice(targetIndex, 0, movedSection);
+
+      const nextOrderById = new Map<number, number>();
+      reordered.forEach((section, index) => {
+        nextOrderById.set(section.id, index + 1);
+      });
+
+      return {
+        ...prev,
+        content: prev.content.map((content) =>
+          content.topic_id === currentTopic.id && nextOrderById.has(content.id)
+            ? { ...content, sort_order: nextOrderById.get(content.id) ?? content.sort_order }
+            : content
+        ),
+      };
     });
   };
 
@@ -950,9 +1201,46 @@ export function AdminModulesPage() {
     previewSelection.view === 'lesson' || previewSelection.view === 'topic' || previewSelection.view === 'postTest'
       ? lessons.find((lesson) => lesson.id === previewSelection.lessonId) ?? null
       : null;
+  const previewCurrentLessonMediaUrls = getLessonOverviewMediaUrls(previewCurrentLesson);
   const previewCurrentTopic =
     previewSelection.view === 'topic' ? builder?.topics.find((topic) => topic.id === previewSelection.topicId) ?? null : null;
   const previewTopicSections = previewCurrentTopic ? contentByTopic.get(previewCurrentTopic.id) ?? [] : [];
+  const previewLessonTopics = previewCurrentLesson
+    ? builder?.topics.filter((topic) => topic.lesson_id === previewCurrentLesson.id).sort((a, b) => a.sort_order - b.sort_order)
+    : [];
+
+  const previewCompletionPercent = builder?.lessons?.length
+    ? Math.round((builder.lessons.filter((lesson) => lesson.completed).length / builder.lessons.length) * 100)
+    : 0;
+
+  const previewPageTitle =
+    previewSelection.view === 'lesson' && previewCurrentLesson
+      ? `Lesson ${previewCurrentLesson.sequence_no} - ${previewCurrentLesson.title}`
+      : previewSelection.view === 'topic' && previewCurrentTopic
+      ? `Topic - ${previewCurrentTopic.title}`
+      : previewSelection.view === 'preTest'
+      ? 'Pre-Test'
+      : previewSelection.view === 'postTest'
+      ? 'Post-Test'
+      : previewSelection.view === 'finalExam'
+      ? 'Final Exam'
+      : 'Preview';
+
+  const previewPageSummary =
+    previewSelection.view === 'lesson' && previewCurrentLesson
+      ? previewCurrentLesson.summary
+      : previewSelection.view === 'topic' && previewCurrentTopic
+      ? previewCurrentTopic.summary
+      : previewCurrentQuiz
+      ? `Passing ${previewCurrentQuiz.passing_score}%, ${previewCurrentQuiz.time_limit_minutes} min, ${previewCurrentQuiz.attempt_limit} attempts`
+      : 'Choose a lesson, topic, or assessment to preview.';
+
+  const getSequenceLabel = (item: typeof sequence[number]) => {
+    if (item.selection.view === 'preTest') return 'Pre-Test';
+    if (item.selection.view === 'postTest') return 'Post-Test';
+    if (item.selection.view === 'finalExam') return 'Simulation';
+    return 'Lesson';
+  };
 
   return (
     <section className="space-y-5">
@@ -992,12 +1280,24 @@ export function AdminModulesPage() {
                   <span className="rounded-full bg-white/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-slate-200">
                     {normalizeModuleCategory(module.category)}
                   </span>
-                  <button
-                    onClick={() => openModuleEdit(module)}
-                    className="rounded-md border border-white/20 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-slate-200 hover:bg-white/10"
-                  >
-                    Edit
-                  </button>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={() => openModuleEdit(module)}
+                      aria-label={`Edit module ${module.title}`}
+                      title="Edit module"
+                      className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-white/20 text-slate-200 transition hover:bg-white/10"
+                    >
+                      <Pencil size={14} />
+                    </button>
+                    <button
+                      onClick={() => void handleDeleteModule(module)}
+                      aria-label={`Delete module ${module.title}`}
+                      title="Delete module"
+                      className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-rose-400/40 text-rose-200 transition hover:bg-rose-500/10"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
                 </div>
                 <div className="mb-3 mt-3 aspect-video w-full overflow-hidden rounded-md border border-white/10 bg-white/5">
                   {module.thumbnail_url ? (
@@ -1016,236 +1316,375 @@ export function AdminModulesPage() {
                     {module.is_locked ? 'Locked' : 'Unlocked'}
                   </span>
                 </div>
-                <button
-                  onClick={() => void run(async () => loadBuilder(module.id))}
-                  className="mt-4 rounded-md bg-brand-600 px-3 py-2 text-sm font-semibold text-white hover:bg-brand-500"
+                <a
+                  href={`/admin/modules?builder=1&moduleId=${module.id}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="mt-4 inline-flex items-center justify-center rounded-md bg-brand-600 px-3 py-2 text-sm font-semibold text-white hover:bg-brand-500"
                 >
                   Open Builder
-                </button>
+                </a>
               </article>
             ))}
           </div>
         </div>
-      ) : (
+      ) : null}
+
+      {builder ? (
         <div className="space-y-3">
-          <div className="rounded-xl border border-white/10 bg-slate-900/70">
-            <div className="flex flex-wrap items-center gap-2 border-b border-white/10 px-4 py-3">
-              <p className="font-semibold text-brand-300">HelpDesk Academy</p>
-              <button onClick={() => openAddNodeModal('preTest')} className="rounded-full border border-white/10 bg-slate-800/70 px-3 py-1.5 text-xs font-semibold text-slate-200 hover:bg-slate-700">Pre-Test</button>
-              <button onClick={() => openAddNodeModal('lesson')} className="rounded-full border border-white/10 bg-slate-800/70 px-3 py-1.5 text-xs font-semibold text-slate-200 hover:bg-slate-700">Add Lesson</button>
-              <button onClick={() => openAddNodeModal('topic')} className="rounded-full border border-white/10 bg-slate-800/70 px-3 py-1.5 text-xs font-semibold text-slate-200 hover:bg-slate-700">Add Topic</button>
-              <button onClick={() => openAddNodeModal('postTest')} className="rounded-full border border-white/10 bg-slate-800/70 px-3 py-1.5 text-xs font-semibold text-slate-200 hover:bg-slate-700">Post-Test</button>
-              <button onClick={() => void handleAddFinalExam()} className="rounded-full border border-amber-400/30 bg-amber-500/10 px-3 py-1.5 text-xs font-semibold text-amber-200 hover:bg-amber-500/20">Final Exam</button>
-              <div className="ml-auto flex items-center gap-2">
-                <span className="rounded-full border border-white/10 bg-slate-800/70 px-3 py-1 text-[11px] font-semibold text-slate-300">{sequence.length} pages</span>
-                <button onClick={openPreview} className="inline-flex items-center gap-1 rounded-full border border-brand-400/50 px-3 py-1.5 text-xs font-semibold text-brand-300 hover:bg-brand-500/10"><Eye size={13} />Preview</button>
-                <button onClick={() => setBuilder(null)} className="inline-flex items-center gap-1 rounded-full border border-white/20 px-3 py-1.5 text-xs font-semibold text-slate-200 hover:bg-white/10"><ArrowLeft size={13} />Back</button>
-              </div>
+          <div className="flex h-12 items-center gap-3 rounded-xl border border-white/10 bg-slate-900/80 px-4">
+            <p className="text-sm font-semibold text-brand-300">Module Builder</p>
+            <div className="h-5 w-px bg-white/10" />
+            <div className="flex items-center gap-1 text-xs text-slate-400">
+              <span className="text-slate-300">Modules</span>
+              <span>/</span>
+              <span className="text-slate-300">{builder.module.title}</span>
+              <span>/</span>
+              <span className="font-medium text-slate-100">{currentBuilderLabel}</span>
             </div>
+            <div className="ml-auto flex items-center gap-2">
+              <span
+                className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-semibold ${
+                  builder.module.is_active
+                    ? 'border-emerald-400/30 bg-emerald-500/10 text-emerald-200'
+                    : 'border-amber-400/30 bg-amber-500/10 text-amber-200'
+                }`}
+              >
+                <span className={`h-1.5 w-1.5 rounded-full ${builder.module.is_active ? 'bg-emerald-300' : 'bg-amber-300'}`} />
+                {builder.module.is_active ? 'Published' : 'Draft'}
+              </span>
+              <button
+                onClick={openPreview}
+                disabled={totalPages === 0}
+                className="inline-flex items-center gap-1 rounded-md border border-brand-400/40 px-3 py-1.5 text-xs font-semibold text-brand-300 hover:bg-brand-500/10 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <Eye size={13} />
+                Preview
+              </button>
+              <button onClick={closeBuilderView} className="inline-flex items-center gap-1 rounded-md border border-white/20 px-3 py-1.5 text-xs font-semibold text-slate-200 hover:bg-white/10"><ArrowLeft size={13} />Back</button>
+            </div>
+          </div>
 
-            <div className="grid gap-3 p-3 xl:grid-cols-[260px_1fr]">
-              <aside className="rounded-xl border border-white/10 bg-slate-900/90 p-3">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.15em] text-slate-400">Learning Structure</p>
-                <div className="mt-3 space-y-2">
-                  <button onClick={() => setSelection({ view: 'preTest' })} className={`w-full rounded-full border px-3 py-2 text-left text-sm ${selection.view === 'preTest' ? 'border-violet-400/40 bg-violet-500/20 text-violet-100' : 'border-white/15 bg-slate-800/70 text-slate-200'}`}>Pre-Test</button>
-                  {lessons.map((lesson) => (
-                    <div key={lesson.id} className="rounded-xl border border-white/10 bg-slate-800/70 p-2">
-                      <button onClick={() => setSelection({ view: 'lesson', lessonId: lesson.id })} className={`w-full rounded-full px-3 py-1.5 text-left text-sm ${selection.view === 'lesson' && selection.lessonId === lesson.id ? 'bg-brand-500 text-slate-950 font-semibold' : 'text-slate-200'}`}>
-                        Lesson {lesson.sequence_no}: {lesson.title}
-                      </button>
-                      <div className="mt-2 space-y-1 border-l border-white/10 pl-3">
-                        {(topicsByLesson.get(lesson.id) ?? []).map((topic) => (
-                          <button key={topic.id} onClick={() => setSelection({ view: 'topic', lessonId: lesson.id, topicId: topic.id })} className={`block w-full rounded-full px-2 py-1 text-left text-xs ${selection.view === 'topic' && selection.topicId === topic.id ? 'bg-emerald-500/25 text-emerald-100' : 'text-slate-300 hover:bg-white/10'}`}>
-                            Topic {topic.sort_order}: {topic.title}
-                          </button>
-                        ))}
-                        <button onClick={() => setSelection({ view: 'postTest', lessonId: lesson.id })} className={`block w-full rounded-full px-2 py-1 text-left text-xs ${selection.view === 'postTest' && selection.lessonId === lesson.id ? 'bg-orange-500/25 text-orange-100' : 'text-slate-300 hover:bg-white/10'}`}>Post-Test</button>
-                      </div>
+          <div className="flex h-[calc(100vh-6rem)] min-h-[760px] overflow-hidden rounded-xl border border-white/10 bg-slate-900/70">
+            <aside className="flex w-[300px] shrink-0 flex-col border-r border-white/10 bg-slate-950/80">
+              <div className="border-b border-white/10 px-4 py-4">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">Module Structure</p>
+                <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-800">
+                  <div className="h-full rounded-full bg-brand-500" style={{ width: `${builderProgressPercent}%` }} />
+                </div>
+                <p className="mt-2 text-xs text-slate-400">
+                  {totalPages > 0 ? `${currentPageNumber} of ${totalPages} pages` : 'No pages yet'}
+                </p>
+              </div>
+
+              <div className="flex-1 space-y-2 overflow-y-auto px-3 py-3">
+                {preQuiz ? (
+                  <button onClick={() => setSelection({ view: 'preTest' })} className={`w-full rounded-md px-3 py-2 text-left text-sm ${selection.view === 'preTest' ? 'bg-violet-500/20 text-violet-100' : 'text-slate-300 hover:bg-white/10'}`}>Pre-Test</button>
+                ) : null}
+                {lessons.map((lesson) => (
+                  <div key={lesson.id} className="space-y-1">
+                    <p className="px-2 pt-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">Lesson {lesson.sequence_no}</p>
+                    <button onClick={() => setSelection({ view: 'lesson', lessonId: lesson.id })} className={`w-full rounded-md px-3 py-2 text-left text-sm ${selection.view === 'lesson' && selection.lessonId === lesson.id ? 'bg-brand-500 text-slate-950 font-semibold' : 'text-slate-200 hover:bg-white/10'}`}>
+                      {lesson.title}
+                    </button>
+                    <div className="space-y-1 border-l border-white/10 pl-3">
+                      {(topicsByLesson.get(lesson.id) ?? []).map((topic) => (
+                        <button key={topic.id} onClick={() => setSelection({ view: 'topic', lessonId: lesson.id, topicId: topic.id })} className={`block w-full rounded-md px-2 py-1.5 text-left text-xs ${selection.view === 'topic' && selection.topicId === topic.id ? 'bg-emerald-500/25 text-emerald-100' : 'text-slate-300 hover:bg-white/10'}`}>
+                          Topic {topic.sort_order}: {topic.title}
+                        </button>
+                      ))}
+                      {postQuizByLesson.get(lesson.id) ? (
+                        <button onClick={() => setSelection({ view: 'postTest', lessonId: lesson.id })} className={`block w-full rounded-md px-2 py-1.5 text-left text-xs ${selection.view === 'postTest' && selection.lessonId === lesson.id ? 'bg-orange-500/25 text-orange-100' : 'text-slate-300 hover:bg-white/10'}`}>Post-Test</button>
+                      ) : null}
                     </div>
-                  ))}
-                  <button onClick={() => setSelection({ view: 'finalExam' })} className={`w-full rounded-full border px-3 py-2 text-left text-sm ${selection.view === 'finalExam' ? 'border-amber-400/40 bg-amber-500/20 text-amber-100' : 'border-white/15 bg-slate-800/70 text-slate-200'}`}>Final Exam</button>
-                </div>
-              </aside>
-
-              <div className="overflow-hidden rounded-xl border border-white/10 bg-slate-900/90">
-                <div className="flex items-center gap-2 border-b border-white/10 px-4 py-3">
-                  <p className="text-xs text-slate-300">{sequence[selectionIndex]?.label ?? 'Builder'}</p>
-                  <div className="ml-auto">
-                    <button onClick={() => void handleDeleteCurrentSelection()} className="inline-flex items-center gap-1 rounded-full border border-rose-400/40 px-3 py-1.5 text-xs font-semibold text-rose-200 hover:bg-rose-500/10"><Trash2 size={13} />Delete Page</button>
                   </div>
-                </div>
+                ))}
+                {finalQuiz ? (
+                  <button onClick={() => setSelection({ view: 'finalExam' })} className={`w-full rounded-md px-3 py-2 text-left text-sm ${selection.view === 'finalExam' ? 'bg-amber-500/20 text-amber-100' : 'text-amber-200 hover:bg-amber-500/10'}`}>Final Exam</button>
+                ) : null}
+              </div>
 
-                <div className="max-h-[calc(100vh-22rem)] space-y-4 overflow-y-auto p-4">
+              <div className="space-y-1 border-t border-white/10 px-3 py-3">
+                <button onClick={() => openAddNodeModal('lesson')} className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs font-semibold text-brand-300 hover:bg-brand-500/10"><Plus size={13} />Add Lesson</button>
+                <button onClick={() => openAddNodeModal('topic')} className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs font-semibold text-slate-300 hover:bg-white/10"><Plus size={13} />Add Topic</button>
+                <button onClick={() => openAddNodeModal('preTest')} className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs font-semibold text-violet-300 hover:bg-violet-500/10"><Plus size={13} />Add Pre-Test</button>
+                <button onClick={() => openAddNodeModal('postTest')} className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs font-semibold text-orange-300 hover:bg-orange-500/10"><Plus size={13} />Add Post-Test</button>
+                <button onClick={() => void handleAddFinalExam()} className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs font-semibold text-amber-300 hover:bg-amber-500/10"><Plus size={13} />Add Final Exam</button>
+              </div>
+            </aside>
+
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+              <div className="flex h-11 items-center justify-between border-b border-white/10 bg-slate-900/80 px-4">
+                <div className="flex min-w-0 items-center gap-3">
+                  <div className="flex max-w-[220px] items-center gap-1 overflow-x-auto pr-1">
+                    {sequence.map((item, index) => (
+                      <button
+                        key={`${selectionKey(item.selection)}-${index}`}
+                        type="button"
+                        onClick={() => setSelection(item.selection)}
+                        className={`h-1.5 rounded-full transition-all ${index === selectionIndex ? 'w-7 bg-brand-500' : 'w-5 bg-slate-700 hover:bg-slate-500'}`}
+                        aria-label={`Go to ${item.label}`}
+                      />
+                    ))}
+                  </div>
+                  <p className="truncate text-xs text-slate-400">
+                    Page <span className="font-semibold text-slate-100">{currentPageNumber || '-'}</span> of{' '}
+                    <span className="font-semibold text-slate-100">{totalPages || '-'}</span> -{' '}
+                    <span className="font-semibold text-slate-100">{currentBuilderLabel}</span>
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button disabled={selectionIndex <= 0} onClick={() => { const previous = sequence[selectionIndex - 1]; if (previous) setSelection(previous.selection); }} className="inline-flex items-center gap-1 rounded-md border border-white/15 px-2.5 py-1 text-xs font-semibold text-slate-200 disabled:opacity-40"><ChevronLeft size={13} />Previous</button>
+                  <button disabled={selectionIndex < 0 || selectionIndex >= totalPages - 1} onClick={() => { const next = sequence[selectionIndex + 1]; if (next) setSelection(next.selection); }} className="inline-flex items-center gap-1 rounded-md border border-white/15 px-2.5 py-1 text-xs font-semibold text-slate-200 disabled:opacity-40">Next<ChevronRight size={13} /></button>
+                  <button onClick={() => void handleDeleteCurrentSelection()} className="inline-flex items-center gap-1 rounded-md border border-rose-400/40 px-2.5 py-1 text-xs font-semibold text-rose-200 hover:bg-rose-500/10"><Trash2 size={13} />Delete</button>
+                </div>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-4 sm:p-5">
+                <div className="space-y-5">
                   {selection.view === 'lesson' && currentLesson ? (
-                    <div className="space-y-4 rounded-2xl border border-white/10 bg-slate-950/40 p-5">
-                      <div className="grid gap-3 md:grid-cols-2">
-                        <label className="space-y-1"><span className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Lesson Title</span><input value={currentLesson.title} onChange={(event) => updateLessonLocal(currentLesson.id, { title: event.target.value })} className="w-full rounded-md border border-white/15 bg-slate-900/70 px-3 py-2 text-sm text-slate-100" /></label>
-                        <label className="space-y-1"><span className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Estimated Minutes</span><input type="number" min={1} value={currentLesson.estimated_minutes} onChange={(event) => updateLessonLocal(currentLesson.id, { estimated_minutes: Number(event.target.value) || 1 })} className="w-full rounded-md border border-white/15 bg-slate-900/70 px-3 py-2 text-sm text-slate-100" /></label>
-                      </div>
-                      <label className="space-y-1">
-                        <span className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Lesson Content</span>
-                        <div className="overflow-hidden rounded-md border border-white/15 bg-slate-900/70">
-                          <div className="flex flex-wrap items-center gap-2 border-b border-white/10 p-2">
-                            <div className={editorToolbarGroupClass}>
-                              <button type="button" onMouseDown={preventToolbarButtonBlur} onClick={() => applyLessonContentCommand('bold')} className={editorToolbarButtonClass}>B</button>
-                              <button type="button" onMouseDown={preventToolbarButtonBlur} onClick={() => applyLessonContentCommand('italic')} className={`${editorToolbarButtonClass} italic`}>I</button>
-                              <button type="button" onMouseDown={preventToolbarButtonBlur} onClick={() => applyLessonContentCommand('underline')} className={`${editorToolbarButtonClass} underline`}>U</button>
-                            </div>
-                            <div className={editorToolbarGroupClass}>
-                              <button
-                                type="button"
-                                onMouseDown={preventToolbarButtonBlur}
-                                onClick={() => applyLessonContentCommand('insertUnorderedList')}
-                                className={editorToolbarIconButtonClass}
-                                title="Bulleted list"
-                                aria-label="Bulleted list"
-                              >
-                                <List size={14} />
-                              </button>
-                              <button
-                                type="button"
-                                onMouseDown={preventToolbarButtonBlur}
-                                onClick={() => applyLessonContentCommand('insertOrderedList')}
-                                className={editorToolbarIconButtonClass}
-                                title="Numbered list"
-                                aria-label="Numbered list"
-                              >
-                                <ListOrdered size={14} />
-                              </button>
-                            </div>
-                            <div className={editorToolbarGroupClass}>
-                              <button
-                                type="button"
-                                onMouseDown={preventToolbarButtonBlur}
-                                onClick={() => applyLessonContentCommand('justifyLeft')}
-                                className={editorToolbarIconButtonClass}
-                                title="Align left"
-                                aria-label="Align left"
-                              >
-                                <AlignLeft size={14} />
-                              </button>
-                              <button
-                                type="button"
-                                onMouseDown={preventToolbarButtonBlur}
-                                onClick={() => applyLessonContentCommand('justifyCenter')}
-                                className={editorToolbarIconButtonClass}
-                                title="Align center"
-                                aria-label="Align center"
-                              >
-                                <AlignCenter size={14} />
-                              </button>
-                              <button
-                                type="button"
-                                onMouseDown={preventToolbarButtonBlur}
-                                onClick={() => applyLessonContentCommand('justifyRight')}
-                                className={editorToolbarIconButtonClass}
-                                title="Align right"
-                                aria-label="Align right"
-                              >
-                                <AlignRight size={14} />
-                              </button>
-                              <button
-                                type="button"
-                                onMouseDown={preventToolbarButtonBlur}
-                                onClick={() => applyLessonContentCommand('justifyFull')}
-                                className={editorToolbarIconButtonClass}
-                                title="Justify"
-                                aria-label="Justify"
-                              >
-                                <AlignJustify size={14} />
-                              </button>
-                            </div>
-                            <div className={editorToolbarGroupClass}>
-                              <select
-                                defaultValue=""
-                                onMouseDown={rememberLessonEditorSelection}
-                                onChange={(event) => {
-                                  const value = event.target.value;
-                                  if (!value) return;
-                                  applyLessonContentCommand('fontSize', value);
-                                  event.target.value = '';
-                                }}
-                                className={editorToolbarSelectClass}
-                              >
-                                <option value="">Size</option>
-                                <option value="2">Small</option>
-                                <option value="3">Normal</option>
-                                <option value="5">Large</option>
-                                <option value="6">X-Large</option>
-                              </select>
-                              <select
-                                defaultValue=""
-                                onMouseDown={rememberLessonEditorSelection}
-                                onChange={(event) => {
-                                  const value = event.target.value;
-                                  if (!value) return;
-                                  applyLessonContentCommand('foreColor', value);
-                                  event.target.value = '';
-                                }}
-                                className={editorToolbarSelectClass}
-                              >
-                                <option value="">Color</option>
-                                <option value="#f5c800">Yellow</option>
-                                <option value="#4a8fe8">Blue</option>
-                                <option value="#4caf7d">Green</option>
-                                <option value="#e05c5c">Red</option>
-                                <option value="#e8eaf0">White</option>
-                              </select>
-                              <button type="button" onMouseDown={preventToolbarButtonBlur} onClick={() => applyLessonContentCommand('removeFormat')} className={editorToolbarButtonClass}>Clear</button>
-                            </div>
-                          </div>
-                          <div
-                            ref={lessonContentEditorRef}
-                            contentEditable
-                            suppressContentEditableWarning
-                            onFocus={rememberLessonEditorSelection}
-                            onMouseUp={rememberLessonEditorSelection}
-                            onKeyUp={rememberLessonEditorSelection}
-                            onBlur={(event) => {
-                              rememberLessonEditorSelection();
-                              updateLessonLocal(currentLesson.id, { overview_text: sanitizeRichHtml(event.currentTarget.innerHTML) });
-                            }}
-                            className="min-h-[180px] p-3 text-sm text-slate-100 outline-none"
-                          />
+                    <div className="space-y-4">
+                      <div className="flex flex-wrap items-start justify-between gap-3 rounded-xl border border-white/10 bg-slate-950/50 px-4 py-3">
+                        <div>
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Lesson Editor</p>
+                          <p className="mt-1 text-sm text-slate-300">Edit lesson title, duration, content, and media.</p>
                         </div>
-                      </label>
-                      <div className="space-y-2">
-                        <span className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Upload Photo/Video</span>
-                        <label className="flex min-h-[220px] cursor-pointer flex-col items-center justify-center gap-3 rounded-md border-2 border-dashed border-white/25 bg-slate-900/60 p-6 text-center hover:border-brand-400/70 hover:bg-slate-900/80">
-                          {currentLesson.overview_image_url ? (
-                            isVideoMediaUrl(currentLesson.overview_image_url) ? (
-                              <video src={currentLesson.overview_image_url} controls className="max-h-[220px] w-full rounded-md object-contain" />
-                            ) : (
-                              <img src={currentLesson.overview_image_url} alt={currentLesson.title} className="max-h-[220px] w-full rounded-md object-contain" />
-                            )
-                          ) : (
-                            <>
-                              <Upload size={36} className="text-slate-300" />
-                              <p className="text-lg font-semibold text-slate-200">UPLOAD PHOTO/VIDEO</p>
-                              <p className="text-xs text-slate-400">PNG, JPG, WEBP, GIF, MP4, WEBM</p>
-                            </>
-                          )}
-                          <input
-                            type="file"
-                            accept="image/*,video/*"
-                            className="hidden"
-                            onChange={(event) => {
-                              const file = event.target.files?.[0];
-                              if (!file) return;
-                              void run(async () => {
-                                await uploadLessonMedia(file);
-                              });
-                            }}
-                          />
-                        </label>
+                        <button
+                          type="button"
+                          onClick={() => void saveCurrentLesson()}
+                          className="rounded-full bg-brand-500 px-4 py-2 text-xs font-semibold text-slate-950 hover:bg-brand-400"
+                        >
+                          Save Lesson
+                        </button>
                       </div>
-                      <div><button onClick={() => void saveCurrentLesson()} className="rounded-full bg-brand-500 px-4 py-2 text-xs font-semibold text-slate-950 hover:bg-brand-400">Save Lesson</button></div>
+
+                      <div className="space-y-4">
+                        <div className="space-y-4 rounded-xl border border-white/10 bg-slate-950/40 p-4">
+                          <div className="grid gap-3 md:grid-cols-2">
+                            <label className="space-y-1"><span className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Lesson Title</span><input value={currentLesson.title} onChange={(event) => updateLessonLocal(currentLesson.id, { title: event.target.value })} className="w-full rounded-md border border-white/15 bg-slate-900/70 px-3 py-2 text-sm text-slate-100" /></label>
+                            <label className="space-y-1"><span className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Estimated Minutes</span><input type="number" min={1} value={currentLesson.estimated_minutes} onChange={(event) => updateLessonLocal(currentLesson.id, { estimated_minutes: Number(event.target.value) || 1 })} className="w-full rounded-md border border-white/15 bg-slate-900/70 px-3 py-2 text-sm text-slate-100" /></label>
+                          </div>
+                          <label className="space-y-1">
+                            <span className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Lesson Content</span>
+                            <div className="flex h-[min(61vh,760px)] min-h-[520px] flex-col overflow-hidden rounded-md border border-white/15 bg-slate-900/70">
+                              <div className="flex flex-wrap items-center gap-2 border-b border-white/10 p-2">
+                                <div className={editorToolbarGroupClass}>
+                                  <button type="button" onMouseDown={preventToolbarButtonBlur} onClick={() => applyLessonContentCommand('bold')} className={editorToolbarButtonClass}>B</button>
+                                  <button type="button" onMouseDown={preventToolbarButtonBlur} onClick={() => applyLessonContentCommand('italic')} className={`${editorToolbarButtonClass} italic`}>I</button>
+                                  <button type="button" onMouseDown={preventToolbarButtonBlur} onClick={() => applyLessonContentCommand('underline')} className={`${editorToolbarButtonClass} underline`}>U</button>
+                                </div>
+                                <div className={editorToolbarGroupClass}>
+                                  <button
+                                    type="button"
+                                    onMouseDown={preventToolbarButtonBlur}
+                                    onClick={() => applyLessonContentCommand('insertUnorderedList')}
+                                    className={editorToolbarIconButtonClass}
+                                    title="Bulleted list"
+                                    aria-label="Bulleted list"
+                                  >
+                                    <List size={14} />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onMouseDown={preventToolbarButtonBlur}
+                                    onClick={() => applyLessonContentCommand('insertOrderedList')}
+                                    className={editorToolbarIconButtonClass}
+                                    title="Numbered list"
+                                    aria-label="Numbered list"
+                                  >
+                                    <ListOrdered size={14} />
+                                  </button>
+                                </div>
+                                <div className={editorToolbarGroupClass}>
+                                  <button
+                                    type="button"
+                                    onMouseDown={preventToolbarButtonBlur}
+                                    onClick={() => applyLessonContentCommand('justifyLeft')}
+                                    className={editorToolbarIconButtonClass}
+                                    title="Align left"
+                                    aria-label="Align left"
+                                  >
+                                    <AlignLeft size={14} />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onMouseDown={preventToolbarButtonBlur}
+                                    onClick={() => applyLessonContentCommand('justifyCenter')}
+                                    className={editorToolbarIconButtonClass}
+                                    title="Align center"
+                                    aria-label="Align center"
+                                  >
+                                    <AlignCenter size={14} />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onMouseDown={preventToolbarButtonBlur}
+                                    onClick={() => applyLessonContentCommand('justifyRight')}
+                                    className={editorToolbarIconButtonClass}
+                                    title="Align right"
+                                    aria-label="Align right"
+                                  >
+                                    <AlignRight size={14} />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onMouseDown={preventToolbarButtonBlur}
+                                    onClick={() => applyLessonContentCommand('justifyFull')}
+                                    className={editorToolbarIconButtonClass}
+                                    title="Justify"
+                                    aria-label="Justify"
+                                  >
+                                    <AlignJustify size={14} />
+                                  </button>
+                                </div>
+                                <div className={editorToolbarGroupClass}>
+                                  <select
+                                    defaultValue=""
+                                    onMouseDown={rememberLessonEditorSelection}
+                                    onChange={(event) => {
+                                      const value = event.target.value;
+                                      if (!value) return;
+                                      applyLessonContentCommand('fontSize', value);
+                                      event.target.value = '';
+                                    }}
+                                    className={editorToolbarSelectClass}
+                                  >
+                                    <option value="">Size</option>
+                                    <option value="2">Small</option>
+                                    <option value="3">Normal</option>
+                                    <option value="5">Large</option>
+                                    <option value="6">X-Large</option>
+                                  </select>
+                                  <select
+                                    defaultValue=""
+                                    onMouseDown={rememberLessonEditorSelection}
+                                    onChange={(event) => {
+                                      const value = event.target.value;
+                                      if (!value) return;
+                                      applyLessonContentCommand('foreColor', value);
+                                      event.target.value = '';
+                                    }}
+                                    className={editorToolbarSelectClass}
+                                  >
+                                    <option value="">Color</option>
+                                    <option value="#f5c800">Yellow</option>
+                                    <option value="#4a8fe8">Blue</option>
+                                    <option value="#4caf7d">Green</option>
+                                    <option value="#e05c5c">Red</option>
+                                    <option value="#e8eaf0">White</option>
+                                  </select>
+                                  <button type="button" onMouseDown={preventToolbarButtonBlur} onClick={() => applyLessonContentCommand('removeFormat')} className={editorToolbarButtonClass}>Clear</button>
+                                </div>
+                              </div>
+                              <div
+                                ref={lessonContentEditorRef}
+                                contentEditable
+                                suppressContentEditableWarning
+                                onFocus={rememberLessonEditorSelection}
+                                onMouseUp={rememberLessonEditorSelection}
+                                onKeyUp={rememberLessonEditorSelection}
+                                onBlur={(event) => {
+                                  rememberLessonEditorSelection();
+                                  updateLessonLocal(currentLesson.id, { overview_text: sanitizeRichHtml(event.currentTarget.innerHTML) });
+                                }}
+                                className="flex-1 overflow-y-auto p-3 text-sm text-slate-100 outline-none"
+                              />
+                            </div>
+                          </label>
+                        </div>
+
+                        <div className="space-y-2 rounded-xl border border-white/10 bg-slate-950/40 p-4">
+                          <span className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Lesson Media</span>
+                          <p className="text-xs text-slate-400">Upload up to {MAX_LESSON_MEDIA_ITEMS} image/video items used in the lesson preview.</p>
+                          <div className="space-y-3">
+                            {currentLessonMediaUrls.length === 0 ? (
+                              <p className="text-xs text-slate-500">No media uploaded yet.</p>
+                            ) : null}
+
+                            <div className="flex gap-3 overflow-x-auto pb-1">
+                              {currentLessonMediaUrls.map((mediaUrl, mediaIndex) => (
+                                <div key={`${mediaUrl}-${mediaIndex}`} className="relative w-[320px] shrink-0 overflow-hidden rounded-md border border-white/15 bg-slate-900/70 p-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => removeLessonMediaAt(mediaIndex)}
+                                    className="absolute right-3 top-3 z-10 inline-flex h-7 w-7 items-center justify-center rounded-full border border-white/30 bg-slate-950/85 text-slate-200 transition hover:border-rose-300/70 hover:text-rose-200"
+                                    title="Remove media"
+                                    aria-label={`Remove media ${mediaIndex + 1}`}
+                                  >
+                                    <X size={13} />
+                                  </button>
+                                  <div className="flex h-[220px] items-center justify-center rounded-md border border-white/10 bg-black/30 p-2">
+                                    {isVideoMediaUrl(mediaUrl) ? (
+                                      <video src={mediaUrl} controls className="max-h-[220px] w-full rounded-md object-contain" />
+                                    ) : (
+                                      <img src={mediaUrl} alt={`${currentLesson.title} media ${mediaIndex + 1}`} className="max-h-[220px] w-full rounded-md object-contain" />
+                                    )}
+                                  </div>
+                                </div>
+                              ))}
+
+                              {currentLessonMediaUrls.length < MAX_LESSON_MEDIA_ITEMS ? (
+                                <label
+                                  onDragOver={(event) => {
+                                    event.preventDefault();
+                                  }}
+                                  onDrop={(event) => {
+                                    event.preventDefault();
+                                    const file = event.dataTransfer.files?.[0];
+                                    if (!file) return;
+                                    void run(async () => {
+                                      await addLessonMedia(file);
+                                    });
+                                  }}
+                                  className="flex h-[236px] w-[320px] shrink-0 cursor-pointer flex-col items-center justify-center gap-2 rounded-md border-2 border-dashed border-white/25 bg-slate-900/60 p-6 text-center hover:border-brand-400/70 hover:bg-slate-900/80"
+                                >
+                                  <Plus size={24} className="text-slate-200" />
+                                  <p className="text-sm font-semibold text-slate-200">Add Photo/Video</p>
+                                  <p className="text-xs text-slate-400">PNG, JPG, WEBP, GIF, MP4, WEBM</p>
+                                  <input
+                                    type="file"
+                                    accept="image/*,video/*"
+                                    className="hidden"
+                                    onChange={(event) => {
+                                      const file = event.target.files?.[0];
+                                      if (!file) return;
+                                      void run(async () => {
+                                        await addLessonMedia(file);
+                                      });
+                                      event.target.value = '';
+                                    }}
+                                  />
+                                </label>
+                              ) : null}
+                            </div>
+
+                            {currentLessonMediaUrls.length >= MAX_LESSON_MEDIA_ITEMS ? (
+                              <p className="text-xs text-amber-300/90">Maximum of {MAX_LESSON_MEDIA_ITEMS} lesson media items reached.</p>
+                            ) : null}
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   ) : null}
 
                   {selection.view === 'topic' && currentTopic ? (
-                    <div className="space-y-4 rounded-2xl border border-white/10 bg-slate-950/40 p-5">
-                      <div className="grid gap-3 md:grid-cols-2">
+                    <div className="space-y-4">
+                      <div className="flex flex-wrap items-start justify-between gap-3 rounded-xl border border-white/10 bg-slate-950/50 px-4 py-3">
+                        <div>
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Topic Editor</p>
+                          <p className="mt-1 text-sm text-slate-300">Manage topic metadata and section layout/content.</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => void saveCurrentTopic()}
+                          className="rounded-full bg-brand-500 px-4 py-2 text-xs font-semibold text-slate-950 hover:bg-brand-400"
+                        >
+                          Save Topic
+                        </button>
+                      </div>
+
+                      <div className="space-y-4 rounded-xl border border-white/10 bg-slate-950/40 p-4">
+                        <div className="grid gap-3 md:grid-cols-2">
                         <label className="space-y-1"><span className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Topic Title</span><input value={currentTopic.title} onChange={(event) => updateTopicLocal(currentTopic.id, { title: event.target.value })} className="w-full rounded-md border border-white/15 bg-slate-900/70 px-3 py-2 text-sm text-slate-100" /></label>
                         <label className="space-y-1"><span className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Topic Order</span><input type="number" min={1} value={currentTopic.sort_order} onChange={(event) => updateTopicLocal(currentTopic.id, { sort_order: Number(event.target.value) || 1 })} className="w-full rounded-md border border-white/15 bg-slate-900/70 px-3 py-2 text-sm text-slate-100" /></label>
                       </div>
@@ -1270,54 +1709,121 @@ export function AdminModulesPage() {
 
                         {selectedTopicSections.map((section, sectionIndex) => {
                           const sectionTemplate = getTopicTemplateFromBlock(section);
-                          const sectionMediaUrl = section.content_url ?? '';
+                          const sectionMediaUrl = getRenderableMediaUrl(section);
                           const hasSectionMedia = Boolean(sectionMediaUrl);
                           return (
                             <div
                               key={section.id}
-                              className={`space-y-3 rounded-lg border p-3 ${
+                              className={`space-y-3 overflow-hidden rounded-xl border ${
                                 activeTopicSectionId === section.id
                                   ? 'border-brand-400/50 bg-slate-900/70'
                                   : 'border-white/10 bg-slate-900/45'
                               }`}
                             >
-                              <div className="flex flex-wrap items-center justify-between gap-2">
-                                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-300">Section {sectionIndex + 1}</p>
-                                <div className="flex items-center gap-2">
-                                  <label className="inline-flex items-center gap-2 text-xs text-slate-300">
-                                    <span className="font-semibold uppercase tracking-[0.12em] text-slate-400">Topic ContentTopic Template</span>
-                                    <select
-                                      value={sectionTemplate}
-                                      onChange={(event) => {
-                                        const value = event.target.value;
-                                        if (!isTopicLayoutTemplate(value)) return;
-                                        updateContentLocal(section.id, {
-                                          metadata: {
-                                            ...readContentMetadata(section),
-                                            template: value,
-                                          },
-                                        });
-                                      }}
-                                      className="rounded border border-white/15 bg-slate-900 px-2 py-1 text-xs text-slate-200"
-                                    >
-                                      <option value="template-1">Template 1 - Text left, media right (Default)</option>
-                                      <option value="template-2">Template 2 - Text then media</option>
-                                      <option value="template-3">Template 3 - Media left, text right</option>
-                                    </select>
-                                  </label>
-                                  {selectedTopicSections.length > 1 ? (
+                              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 bg-slate-900/70 px-3 py-2">
+                                <span className="shrink-0 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400">
+                                  Section {sectionIndex + 1}
+                                </span>
+                                <div className="flex min-w-0 flex-1 flex-wrap items-center justify-center gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      updateContentLocal(section.id, {
+                                        metadata: {
+                                          ...readContentMetadata(section),
+                                          template: 'template-1',
+                                        },
+                                        })
+                                    }
+                                    className={`inline-flex h-8 items-center justify-center gap-1.5 rounded-md border px-3 text-[11px] font-medium transition ${
+                                      sectionTemplate === 'template-1'
+                                        ? 'border-brand-400/70 bg-brand-500/15 text-brand-100'
+                                        : 'border-white/15 bg-slate-950/50 text-slate-400 hover:border-white/30 hover:text-slate-200'
+                                    }`}
+                                  >
+                                    <span className="flex h-5 w-8 shrink-0 overflow-hidden rounded-sm border border-current/40">
+                                      <span className="m-[2px] flex-[2] rounded-[2px] bg-current/35" />
+                                      <span className="m-[2px] ml-0 flex-1 rounded-[2px] bg-current/20" />
+                                    </span>
+                                    <span className="whitespace-nowrap">Media Right</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      updateContentLocal(section.id, {
+                                        metadata: {
+                                          ...readContentMetadata(section),
+                                          template: 'template-2',
+                                        },
+                                        })
+                                    }
+                                    className={`inline-flex h-8 items-center justify-center gap-1.5 rounded-md border px-3 text-[11px] font-medium transition ${
+                                      sectionTemplate === 'template-2'
+                                        ? 'border-brand-400/70 bg-brand-500/15 text-brand-100'
+                                        : 'border-white/15 bg-slate-950/50 text-slate-400 hover:border-white/30 hover:text-slate-200'
+                                    }`}
+                                  >
+                                    <span className="flex h-5 w-8 shrink-0 flex-col overflow-hidden rounded-sm border border-current/40 p-[2px]">
+                                      <span className="h-1/2 rounded-[2px] bg-current/35" />
+                                      <span className="mt-[2px] h-1/2 rounded-[2px] bg-current/20" />
+                                    </span>
+                                    <span className="whitespace-nowrap">Stacked</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      updateContentLocal(section.id, {
+                                        metadata: {
+                                          ...readContentMetadata(section),
+                                          template: 'template-3',
+                                        },
+                                        })
+                                    }
+                                    className={`inline-flex h-8 items-center justify-center gap-1.5 rounded-md border px-3 text-[11px] font-medium transition ${
+                                      sectionTemplate === 'template-3'
+                                        ? 'border-brand-400/70 bg-brand-500/15 text-brand-100'
+                                        : 'border-white/15 bg-slate-950/50 text-slate-400 hover:border-white/30 hover:text-slate-200'
+                                    }`}
+                                  >
+                                    <span className="flex h-5 w-8 shrink-0 overflow-hidden rounded-sm border border-current/40">
+                                      <span className="m-[2px] flex-1 rounded-[2px] bg-current/20" />
+                                      <span className="m-[2px] ml-0 flex-[2] rounded-[2px] bg-current/35" />
+                                    </span>
+                                    <span className="whitespace-nowrap">Media Left</span>
+                                  </button>
+                                </div>
+                                <div className="flex shrink-0 items-center gap-2">
                                     <button
                                       type="button"
-                                      onClick={() => void removeTopicSection(section.id)}
-                                      className="inline-flex items-center gap-1 rounded-full border border-white/20 px-2 py-1 text-xs text-slate-300 hover:bg-white/10"
+                                      onClick={() => moveTopicSectionLocally(section.id, 'up')}
+                                      disabled={sectionIndex === 0}
+                                      className="inline-flex h-8 items-center rounded-md border border-transparent px-2.5 text-xs text-slate-500 hover:border-white/15 hover:bg-slate-800/70 hover:text-slate-300 disabled:cursor-not-allowed disabled:opacity-40"
                                     >
-                                      <X size={12} />
-                                      Hide
+                                      Up
                                     </button>
-                                  ) : null}
-                                </div>
+                                    <button
+                                      type="button"
+                                      onClick={() => moveTopicSectionLocally(section.id, 'down')}
+                                      disabled={sectionIndex === selectedTopicSections.length - 1}
+                                      className="inline-flex h-8 items-center rounded-md border border-transparent px-2.5 text-xs text-slate-500 hover:border-white/15 hover:bg-slate-800/70 hover:text-slate-300 disabled:cursor-not-allowed disabled:opacity-40"
+                                    >
+                                      Down
+                                    </button>
+                                    <span className="h-4 w-px bg-white/15" />
+                                    {selectedTopicSections.length > 1 ? (
+                                      <button
+                                        type="button"
+                                        onClick={() => void removeTopicSection(section.id)}
+                                        className="inline-flex h-8 items-center gap-1 rounded-md border border-rose-400/30 bg-rose-500/10 px-2.5 text-xs text-rose-200 hover:border-rose-300/50 hover:bg-rose-500/20"
+                                      >
+                                        <X size={12} />
+                                        Delete
+                                      </button>
+                                    ) : null}
+                                  </div>
                               </div>
 
+                              <div className="p-3">
                               <div
                                 className={
                                   sectionTemplate === 'template-2'
@@ -1485,7 +1991,7 @@ export function AdminModulesPage() {
                                     ) : null}
                                     <label className={`flex cursor-pointer flex-col items-center justify-center gap-3 rounded-md border-2 border-dashed border-white/25 bg-slate-900/60 p-6 text-center hover:border-brand-400/70 hover:bg-slate-900/80 ${sectionTemplate === 'template-2' ? 'min-h-[220px]' : 'min-h-[280px]'}`}>
                                       {sectionMediaUrl ? (
-                                        isVideoMediaUrl(sectionMediaUrl) ? (
+                                        section.content_type === 'video' || isVideoMediaUrl(sectionMediaUrl) ? (
                                           <video src={sectionMediaUrl} controls className="max-h-[260px] w-full rounded-md object-contain" />
                                         ) : (
                                           <img src={sectionMediaUrl} alt={`${currentTopic.title} section ${sectionIndex + 1}`} className="max-h-[260px] w-full rounded-md object-contain" />
@@ -1515,82 +2021,197 @@ export function AdminModulesPage() {
                                 </div>
                               </div>
                             </div>
+                            </div>
                           );
                         })}
                       </div>
-                      <div><button onClick={() => void saveCurrentTopic()} className="rounded-full bg-brand-500 px-4 py-2 text-xs font-semibold text-slate-950 hover:bg-brand-400">Save Topic</button></div>
+                    </div>
                     </div>
                   ) : null}
 
-                  {selection.view !== 'lesson' && selection.view !== 'topic' ? (
-                    <div className="space-y-4 rounded-2xl border border-white/10 bg-slate-950/40 p-5">
+                  {selection.view === 'builderHome' ? (
+                    <div className="space-y-2 rounded-2xl border border-white/10 bg-slate-950/40 p-5">
+                      <p className="text-sm font-semibold text-slate-100">Module is blank.</p>
+                      <p className="text-sm text-slate-300">Add a lesson, pre-test, post-test, or final exam from Builder Actions to start building this module.</p>
+                    </div>
+                  ) : null}
+
+                  {selection.view === 'preTest' || selection.view === 'postTest' || selection.view === 'finalExam' ? (
+                    <div className="space-y-4">
                       {!currentQuiz ? (
-                        <div className="space-y-2"><p className="text-sm text-slate-300">No assessment is configured for this stage yet.</p><button onClick={() => void createCurrentAssessment()} className="rounded-full bg-brand-500 px-4 py-2 text-xs font-semibold text-slate-950">Create Assessment</button></div>
+                        <div className="space-y-2 rounded-xl border border-white/10 bg-slate-950/50 p-4"><p className="text-sm text-slate-300">No assessment is configured for this stage yet.</p><button onClick={() => void createCurrentAssessment()} className="rounded-full bg-brand-500 px-4 py-2 text-xs font-semibold text-slate-950">Create Assessment</button></div>
                       ) : (
                         <>
-                          <div className="grid gap-3 md:grid-cols-2">
-                            <label className="space-y-1 md:col-span-2"><span className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Quiz Title</span><input value={currentQuiz.title} onChange={(event) => updateQuizLocal(currentQuiz.id, { title: event.target.value })} className="w-full rounded-md border border-white/15 bg-slate-900/70 px-3 py-2 text-sm text-slate-100" /></label>
-                            <label className="space-y-1"><span className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Passing Score</span><input type="number" min={0} max={100} value={currentQuiz.passing_score} onChange={(event) => updateQuizLocal(currentQuiz.id, { passing_score: Number(event.target.value) || 0 })} className="w-full rounded-md border border-white/15 bg-slate-900/70 px-3 py-2 text-sm text-slate-100" /></label>
-                            <label className="space-y-1"><span className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Time Limit (minutes)</span><input type="number" min={1} value={currentQuiz.time_limit_minutes} onChange={(event) => updateQuizLocal(currentQuiz.id, { time_limit_minutes: Number(event.target.value) || 1 })} className="w-full rounded-md border border-white/15 bg-slate-900/70 px-3 py-2 text-sm text-slate-100" /></label>
-                            <label className="space-y-1"><span className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Attempt Limit</span><input type="number" min={1} value={currentQuiz.attempt_limit} onChange={(event) => updateQuizLocal(currentQuiz.id, { attempt_limit: Number(event.target.value) || 1 })} className="w-full rounded-md border border-white/15 bg-slate-900/70 px-3 py-2 text-sm text-slate-100" /></label>
-                            <label className="inline-flex items-center gap-2 rounded-md border border-white/10 bg-slate-900/70 px-3 py-2 text-sm text-slate-200"><input type="checkbox" checked={currentQuiz.is_active} onChange={(event) => updateQuizLocal(currentQuiz.id, { is_active: event.target.checked })} />Active</label>
-                          </div>
-                          <div className="border-t border-white/10 pt-3">
-                            <button onClick={() => void saveCurrentQuiz()} className="rounded-full bg-brand-500 px-4 py-2 text-xs font-semibold text-slate-950">Save Assessment</button>
-                          </div>
-                          <div className="space-y-3 rounded-xl border border-white/10 bg-slate-900/40 p-3">
-                            <div className="flex items-center">
-                              <p className="text-[11px] font-semibold uppercase tracking-[0.13em] text-slate-400">Questions</p>
+                          <div className="flex flex-wrap items-start justify-between gap-3 rounded-xl border border-white/10 bg-slate-950/50 px-4 py-3">
+                            <div>
+                              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Assessment Builder</p>
+                              <p className="mt-1 text-sm text-slate-300">Set assessment details, then create and save questions.</p>
                             </div>
-                            {selectedQuestions.length === 0 ? (
-                              <div className="rounded-lg border border-dashed border-white/15 bg-slate-950/30 p-4 text-center">
-                                <p className="text-sm text-slate-400">No questions yet.</p>
+                            <button
+                              type="button"
+                              onClick={() => void saveCurrentQuiz()}
+                              className="rounded-full bg-brand-500 px-4 py-2 text-xs font-semibold text-slate-950 hover:bg-brand-400"
+                            >
+                              Save Assessment
+                            </button>
+                          </div>
+                          <div className="space-y-4 rounded-xl border border-white/10 bg-slate-950/40 p-4">
+                            <div className="flex flex-wrap items-start justify-between gap-3">
+                              <div>
+                                <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Assessment Details</p>
+                                <p className="mt-1 text-sm text-slate-300">Configure title, timing, scoring, and activation for this assessment.</p>
+                              </div>
+                            </div>
+                            <div className="grid gap-3 md:grid-cols-2">
+                              <label className="space-y-1 md:col-span-2">
+                                <span className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Assessment Title</span>
+                                <input
+                                  value={currentQuiz.title}
+                                  onChange={(event) => updateQuizLocal(currentQuiz.id, { title: event.target.value })}
+                                  className="w-full rounded-md border border-white/15 bg-slate-900/70 px-3 py-2 text-sm text-slate-100"
+                                />
+                              </label>
+                              <label className="space-y-1">
+                                <span className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Passing Score</span>
+                                <input
+                                  type="number"
+                                  min={0}
+                                  max={100}
+                                  value={currentQuiz.passing_score}
+                                  onChange={(event) => updateQuizLocal(currentQuiz.id, { passing_score: Number(event.target.value) || 0 })}
+                                  className="w-full rounded-md border border-white/15 bg-slate-900/70 px-3 py-2 text-sm text-slate-100"
+                                />
+                              </label>
+                              <label className="space-y-1">
+                                <span className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Time Limit (minutes)</span>
+                                <input
+                                  type="number"
+                                  min={1}
+                                  value={currentQuiz.time_limit_minutes}
+                                  onChange={(event) => updateQuizLocal(currentQuiz.id, { time_limit_minutes: Number(event.target.value) || 1 })}
+                                  className="w-full rounded-md border border-white/15 bg-slate-900/70 px-3 py-2 text-sm text-slate-100"
+                                />
+                              </label>
+                              <label className="space-y-1">
+                                <span className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-400">Attempt Limit</span>
+                                <input
+                                  type="number"
+                                  min={1}
+                                  value={currentQuiz.attempt_limit}
+                                  onChange={(event) => updateQuizLocal(currentQuiz.id, { attempt_limit: Number(event.target.value) || 1 })}
+                                  className="w-full rounded-md border border-white/15 bg-slate-900/70 px-3 py-2 text-sm text-slate-100"
+                                />
+                              </label>
+                              <label className="inline-flex items-center gap-2 rounded-md border border-white/10 bg-slate-900/70 px-3 py-2 text-sm text-slate-200">
+                                <input
+                                  type="checkbox"
+                                  checked={currentQuiz.is_active}
+                                  onChange={(event) => updateQuizLocal(currentQuiz.id, { is_active: event.target.checked })}
+                                />
+                                Active
+                              </label>
+                            </div>
+                          </div>
+                          <div className="space-y-4 rounded-xl border border-white/10 bg-slate-950/40 p-4">
+                            <div className="flex flex-wrap items-start justify-between gap-2 border-b border-white/10 pb-3">
+                              <div>
+                                <p className="text-[11px] font-semibold uppercase tracking-[0.13em] text-slate-400">Questions</p>
+                                <p className="mt-1 text-sm text-slate-300">Build question prompts, scoring, answer type, and correct choices.</p>
+                              </div>
+                              <div className="flex flex-wrap items-center gap-2">
                                 <button
                                   type="button"
                                   onClick={() => void addQuestion()}
-                                  className="mt-3 rounded-full bg-slate-100 px-4 py-2 text-xs font-semibold text-slate-900"
+                                  className="rounded-full bg-slate-100 px-4 py-2 text-xs font-semibold text-slate-900"
                                 >
-                                  + Add First Question
+                                  + Add Question
                                 </button>
+                                {selectedQuestions.length > 0 ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => void saveAllQuestions()}
+                                    className="rounded-full bg-brand-500 px-4 py-2 text-xs font-semibold text-slate-950"
+                                  >
+                                    Save All Questions
+                                  </button>
+                                ) : null}
+                              </div>
+                            </div>
+                            {selectedQuestions.length === 0 ? (
+                              <div className="border border-dashed border-white/15 px-4 py-6 text-center">
+                                <p className="text-sm text-slate-400">No questions yet.</p>
                               </div>
                             ) : (
                               selectedQuestions.map((question, questionIndex) => {
                                 const answers = answersByQuestion.get(question.id) ?? [];
+                                const questionType = normalizeQuestionType(question.question_type);
                                 return (
-                                  <div key={question.id} className="space-y-3 rounded-xl border border-white/10 bg-slate-900/70 p-3">
-                                    <p className="text-[11px] font-semibold uppercase tracking-[0.13em] text-slate-400">
-                                      Question {questionIndex + 1}
-                                    </p>
-                                    <div className="grid gap-2 md:grid-cols-[1fr_110px]">
-                                      <input
-                                        value={question.prompt}
-                                        onChange={(event) => updateQuestionLocal(question.id, { prompt: event.target.value })}
-                                        className="rounded-md border border-white/15 bg-slate-950/70 px-3 py-2 text-sm text-slate-100"
-                                      />
-                                      <input
-                                        type="number"
-                                        min={1}
-                                        value={question.points}
-                                        onChange={(event) => updateQuestionLocal(question.id, { points: Number(event.target.value) || 1 })}
-                                        className="rounded-md border border-white/15 bg-slate-950/70 px-3 py-2 text-sm text-slate-100"
-                                      />
+                                  <div key={question.id} className="space-y-3 rounded-lg border border-white/10 bg-slate-900/40 p-4">
+                                    <div className="flex items-start justify-between gap-3">
+                                      <p className="text-[11px] font-semibold uppercase tracking-[0.13em] text-slate-400">
+                                        Question {questionIndex + 1}
+                                      </p>
+                                      <button
+                                        type="button"
+                                        onClick={() => void removeQuestion(question.id)}
+                                        aria-label={`Delete question ${questionIndex + 1}`}
+                                        title="Delete question"
+                                        className="rounded-full border border-rose-400/40 px-3 py-1.5 text-xs font-semibold text-rose-200 hover:bg-rose-500/10"
+                                      >
+                                        Delete Question
+                                      </button>
+                                    </div>
+                                    <div className="grid items-end gap-2 md:grid-cols-[minmax(0,1fr)_110px_240px]">
+                                      <label className="space-y-1">
+                                        <span className="text-[11px] font-semibold uppercase tracking-[0.13em] text-slate-400">Question Prompt</span>
+                                        <input
+                                          value={question.prompt}
+                                          onChange={(event) => updateQuestionLocal(question.id, { prompt: event.target.value })}
+                                          className="w-full rounded-md border border-white/15 bg-slate-950/70 px-3 py-2 text-sm text-slate-100"
+                                        />
+                                      </label>
+                                      <label className="space-y-1">
+                                        <span className="text-[11px] font-semibold uppercase tracking-[0.13em] text-slate-400">Points</span>
+                                        <input
+                                          type="number"
+                                          min={1}
+                                          value={question.points}
+                                          onChange={(event) => updateQuestionLocal(question.id, { points: Number(event.target.value) || 1 })}
+                                          className="w-full rounded-md border border-white/15 bg-slate-950/70 px-3 py-2 text-sm text-slate-100"
+                                        />
+                                      </label>
+                                      <label className="space-y-1">
+                                        <span className="text-[11px] font-semibold uppercase tracking-[0.13em] text-slate-400">Question Type</span>
+                                        <select
+                                          value={questionType}
+                                          onChange={(event) =>
+                                            setQuestionTypeLocally(question.id, normalizeQuestionType(event.target.value))
+                                          }
+                                          className="w-full rounded-md border border-white/15 bg-slate-950/70 px-3 py-2 text-sm text-slate-100"
+                                        >
+                                          <option value="single_choice">Radio Button (Single Answer)</option>
+                                          <option value="multiple_choice">Check Boxes (Multiple Answers)</option>
+                                        </select>
+                                      </label>
                                     </div>
                                     <div className="space-y-2 border-t border-white/10 pt-3">
                                       {answers.map((answer, answerIndex) => (
                                         <div
                                           key={answer.id}
-                                          className={`grid gap-2 rounded-lg border p-2.5 md:grid-cols-[24px_1fr_auto] ${
-                                            answer.is_correct
-                                              ? 'border-emerald-400/50 bg-emerald-500/10'
-                                              : 'border-white/10 bg-slate-950/60'
+                                          className={`grid gap-2 rounded-md border border-white/10 bg-slate-950/45 p-2 md:grid-cols-[auto_1fr_auto] ${
+                                            answer.is_correct ? 'text-emerald-100' : 'text-slate-100'
                                           }`}
                                         >
-                                          <input
-                                            type="radio"
-                                            name={`correct-${question.id}`}
-                                            checked={Boolean(answer.is_correct)}
-                                            onChange={() => setSingleCorrectAnswerLocally(question.id, answer.id)}
-                                          />
+                                          <label className="inline-flex items-center gap-2">
+                                            <input
+                                              type={questionType === 'single_choice' ? 'radio' : 'checkbox'}
+                                              name={`question-${question.id}-correct`}
+                                              checked={Boolean(answer.is_correct)}
+                                              onChange={() => toggleCorrectAnswerLocally(question.id, answer.id)}
+                                              className={`h-4 w-4 border border-white/15 bg-slate-950 text-emerald-400 ${questionType === 'single_choice' ? 'rounded-full' : 'rounded'}`}
+                                            />
+                                            <span className="text-sm">Correct</span>
+                                          </label>
                                           <input
                                             value={answer.answer_text}
                                             onChange={(event) => updateAnswerLocal(answer.id, { answer_text: event.target.value })}
@@ -1600,14 +2221,20 @@ export function AdminModulesPage() {
                                           <button
                                             type="button"
                                             onClick={() => void removeAnswer(question.id, answer.id)}
-                                            className="rounded-md border border-rose-400/40 px-2 py-1 text-[11px] font-semibold text-rose-200"
+                                            aria-label={`Delete choice ${answerIndex + 1}`}
+                                            title="Delete choice"
+                                            className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-rose-400/50 bg-rose-500/15 text-rose-200 transition hover:bg-rose-500/25"
                                           >
-                                            Delete
+                                            <X size={12} />
                                           </button>
                                         </div>
                                       ))}
                                       <div className="flex items-center justify-between">
-                                        <p className="text-xs text-slate-400">Mark the correct choice using the radio button.</p>
+                                        <p className="text-xs text-slate-400">
+                                          {questionType === 'single_choice'
+                                            ? 'Radio button mode: select exactly one correct answer.'
+                                            : 'Check boxes mode: select all correct answers.'}
+                                        </p>
                                         <button
                                           type="button"
                                           onClick={() => void addChoice(question.id)}
@@ -1617,54 +2244,22 @@ export function AdminModulesPage() {
                                         </button>
                                       </div>
                                     </div>
-                                    <div className="flex flex-wrap gap-2 border-t border-white/10 pt-2">
-                                      <button
-                                        type="button"
-                                        onClick={() => void saveQuestion(question)}
-                                        className="rounded-full bg-brand-500 px-3 py-1.5 text-xs font-semibold text-slate-950"
-                                      >
-                                        Save Question
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => void removeQuestion(question.id)}
-                                        className="rounded-full border border-rose-400/40 px-3 py-1.5 text-xs font-semibold text-rose-200"
-                                      >
-                                        Delete Question
-                                      </button>
-                                    </div>
                                   </div>
                                 );
                               })
                             )}
-                            {selectedQuestions.length > 0 ? (
-                              <div className="flex justify-center pt-1">
-                                <button
-                                  type="button"
-                                  onClick={() => void addQuestion()}
-                                  className="rounded-full bg-slate-100 px-4 py-2 text-xs font-semibold text-slate-900"
-                                >
-                                  + Add Question
-                                </button>
-                              </div>
-                            ) : null}
                           </div>
                         </>
                       )}
                     </div>
                   ) : null}
-                </div>
               </div>
             </div>
           </div>
 
-          <div className="flex items-center justify-between rounded-xl border border-white/10 bg-slate-900/70 px-4 py-2.5">
-            <button disabled={selectionIndex <= 0} onClick={() => { const previous = sequence[selectionIndex - 1]; if (previous) setSelection(previous.selection); }} className="inline-flex items-center gap-1 rounded-full border border-white/15 px-3 py-1.5 text-xs font-semibold text-slate-200 disabled:opacity-40"><ChevronLeft size={14} />Previous</button>
-            <p className="text-xs font-semibold text-slate-400">{sequence[selectionIndex]?.label ?? 'Builder'}</p>
-            <button disabled={selectionIndex < 0 || selectionIndex >= sequence.length - 1} onClick={() => { const next = sequence[selectionIndex + 1]; if (next) setSelection(next.selection); }} className="inline-flex items-center gap-1 rounded-full bg-brand-500 px-3 py-1.5 text-xs font-semibold text-slate-950 disabled:opacity-40">Next<ChevronRight size={14} /></button>
-          </div>
         </div>
-      )}
+        </div>
+      ) : null}
 
       {showCreateModal ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm">
@@ -2030,108 +2625,296 @@ export function AdminModulesPage() {
 
       {showPreviewModal ? (
         <div className="fixed inset-0 z-50 flex items-start justify-center bg-slate-950/90 p-4 backdrop-blur-sm">
-          <div className="h-[90vh] w-full max-w-6xl overflow-hidden rounded-2xl border border-white/10 bg-slate-950">
-            <div className="flex items-center justify-between border-b border-white/10 bg-slate-900 px-5 py-3"><h3 className="text-lg font-bold text-white">Student Preview</h3><button onClick={() => setShowPreviewModal(false)} className="rounded-full border border-white/20 px-4 py-2 text-xs font-semibold text-slate-200">Close</button></div>
-            <div className="grid h-[calc(90vh-61px)] xl:grid-cols-[260px_1fr]">
-              <aside className="overflow-y-auto border-r border-white/10 bg-slate-900/90 p-3">{sequence.map((item, index) => <button key={`preview-${selectionKey(item.selection)}`} onClick={() => setPreviewSelection(item.selection)} className={`mb-2 block w-full rounded-full px-3 py-2 text-left text-xs ${sameSelection(item.selection, previewSelection) ? 'bg-brand-500 font-semibold text-slate-950' : 'text-slate-300 hover:bg-white/10'}`}>{index + 1}. {item.label}</button>)}</aside>
-              <div className="overflow-y-auto p-5">
-                <p className="mb-3 text-xs font-semibold uppercase tracking-[0.15em] text-brand-300">{previewNodeLabel}</p>
-                {previewSelection.view === 'lesson' && previewCurrentLesson ? (
-                  <div className="space-y-3 rounded-xl border border-white/10 bg-slate-900/70 p-4">
-                    <h4 className="text-xl font-bold text-white">{previewCurrentLesson.title}</h4>
-                    <p className="text-sm text-slate-300">{previewCurrentLesson.summary}</p>
-                    {previewCurrentLesson.overview_text ? (
-                      <div
-                        className="rounded-lg border border-white/10 bg-slate-950/60 p-3 text-sm text-slate-200"
-                        dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(previewCurrentLesson.overview_text) }}
-                      />
-                    ) : null}
-                    {previewCurrentLesson.overview_image_url ? (
-                      <img
-                        src={previewCurrentLesson.overview_image_url}
-                        alt={previewCurrentLesson.title}
-                        className="max-h-[320px] w-full rounded-lg border border-white/10 object-contain"
-                      />
-                    ) : null}
+          <div className="h-[90vh] w-full max-w-[95vw] xl:max-w-8xl overflow-hidden rounded-3xl border border-white/10 bg-slate-950">
+            <div className="flex items-center justify-between border-b border-white/10 bg-slate-900 px-5 py-3">
+              <h3 className="text-lg font-bold text-white">Student Preview</h3>
+              <button
+                onClick={() => setShowPreviewModal(false)}
+                className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-rose-500/30 bg-rose-500/10 text-rose-300 transition hover:bg-rose-500/20"
+                aria-label="Close preview"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="grid h-[calc(90vh-70px)] gap-5 overflow-hidden p-5 xl:grid-cols-[536px_minmax(0,1fr)]">
+              <aside className="no-scrollbar rounded-3xl border border-white/10 bg-slate-900/70 p-5 shadow-sm xl:sticky xl:top-20 xl:h-[calc(90vh-5rem)] xl:overflow-y-auto">
+                <div className="rounded-3xl border border-white/10 bg-slate-950/70 p-4">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">
+                    Module {builder?.module.id ?? '--'}
+                  </p>
+                  <p className="mt-2 text-base font-semibold text-white">{builder?.module.title ?? 'Untitled Module'}</p>
+                  <div className="mt-3 flex items-center justify-between text-[11px] text-slate-400">
+                    <span>Progress</span>
+                    <span className="font-semibold text-brand-300">{previewCompletionPercent}%</span>
                   </div>
-                ) : null}
-                {previewSelection.view === 'topic' && previewCurrentTopic ? (
-                  <div className="space-y-4 rounded-xl border border-white/10 bg-slate-900/70 p-4">
-                    <h4 className="text-xl font-bold text-white">{previewCurrentTopic.title}</h4>
-                    {previewCurrentTopic.summary ? <p className="text-sm text-slate-300">{previewCurrentTopic.summary}</p> : null}
-                    {previewTopicSections.length === 0 ? <p className="text-sm text-slate-400">No topic content yet.</p> : null}
-                    {previewTopicSections.map((section, sectionIndex) => {
-                      const sectionTemplate = getTopicTemplateFromBlock(section);
-                      const sectionHtml = sanitizeRichHtml(section.body_text ?? '');
-                      const sectionMediaUrl = section.content_url ?? '';
-                      const hasSectionMedia = Boolean(sectionMediaUrl);
+                  <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-800/70">
+                    <div
+                      className="h-full rounded-full bg-brand-500"
+                      style={{ width: `${Math.max(0, Math.min(100, previewCompletionPercent))}%` }}
+                    />
+                  </div>
+                </div>
 
+                <div className="mt-5 rounded-3xl border border-white/10 bg-slate-950/70 p-4">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Learning Sequence</p>
+                  <div className="mt-3 space-y-3">
+                    {sequence.map((item) => {
+                      const active = sameSelection(item.selection, previewSelection);
                       return (
-                        <div key={section.id} className="space-y-3">
-                          <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400">Section {sectionIndex + 1}</p>
-                          {sectionTemplate === 'template-2' ? (
-                            <div className="space-y-3">
-                              <div className="rounded-lg border border-white/10 bg-slate-950/60 p-3 text-sm text-slate-200">
+                        <button
+                          key={`preview-${selectionKey(item.selection)}`}
+                          type="button"
+                          onClick={() => setPreviewSelection(item.selection)}
+                          className={`w-full rounded-2xl border px-4 py-3 text-left transition ${
+                            active
+                              ? 'border-sky-400/50 bg-sky-500/10 text-white'
+                              : 'border-slate-700/80 bg-slate-950/80 text-slate-300 hover:border-white/20 hover:bg-white/10'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <span className="text-sm font-semibold text-white">{item.label}</span>
+                            <span className="text-[10px] uppercase tracking-[0.16em] text-slate-400">
+                              {getSequenceLabel(item)}
+                            </span>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </aside>
+
+              <div className="flex min-h-0 flex-col overflow-hidden rounded-3xl border border-white/10 bg-slate-900/70 shadow-sm">
+                <div className="border-b border-white/10 bg-slate-950 px-5 py-4">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.15em] text-brand-300">{previewNodeLabel}</p>
+                  <h2 className="mt-2 text-2xl font-bold text-white">{previewPageTitle}</h2>
+                  <p className="mt-2 max-w-2xl text-sm text-slate-300">{previewPageSummary}</p>
+                </div>
+
+                <div className="min-h-0 flex-1 overflow-y-auto p-5">
+                  {previewSelection.view === 'lesson' && previewCurrentLesson ? (
+                    <div className="space-y-6">
+                      {previewCurrentLesson.overview_text ? (
+                        <div className="rounded-3xl border border-white/10 bg-slate-950/60 p-5 text-sm text-slate-200">
+                          <div dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(previewCurrentLesson.overview_text) }} />
+                        </div>
+                      ) : null}
+                      {previewCurrentLessonMediaUrls.length > 0 ? (
+                        <div className="grid gap-3 md:grid-cols-2">
+                          {previewCurrentLessonMediaUrls.map((mediaUrl, mediaIndex) =>
+                            isVideoMediaUrl(mediaUrl) ? (
+                              <video
+                                key={`${mediaUrl}-${mediaIndex}`}
+                                src={mediaUrl}
+                                controls
+                                className="h-[220px] w-full rounded-3xl border border-white/10 bg-black/30 object-contain"
+                              />
+                            ) : (
+                              <img
+                                key={`${mediaUrl}-${mediaIndex}`}
+                                src={mediaUrl}
+                                alt={`${previewCurrentLesson.title} media ${mediaIndex + 1}`}
+                                className="h-[220px] w-full rounded-3xl border border-white/10 bg-black/30 object-contain"
+                              />
+                            )
+                          )}
+                        </div>
+                      ) : null}
+                      <div className="space-y-4">
+                        {previewLessonTopics.length === 0 ? (
+                          <p className="rounded-3xl border border-white/10 bg-slate-950/60 p-5 text-sm text-slate-400">
+                            No lesson topics configured yet.
+                          </p>
+                        ) : (
+                          previewLessonTopics.map((topic, topicIndex) => {
+                            const topicSections = contentByTopic.get(topic.id) ?? [];
+                            return (
+                              <div key={topic.id} className="rounded-3xl border border-white/10 bg-slate-950/60 p-5">
+                                <div className="flex items-center justify-between gap-4">
+                                  <div>
+                                    <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Topic {topicIndex + 1}</p>
+                                    <h3 className="mt-2 text-lg font-semibold text-white">{topic.title}</h3>
+                                  </div>
+                                  <StatusPill
+                                    text={topicSections.length > 0 ? 'With Content' : 'Empty'}
+                                    className={
+                                      topicSections.length > 0
+                                        ? 'border-emerald-300/30 bg-emerald-500/10 text-emerald-200'
+                                        : 'border-slate-400/30 bg-slate-700/30 text-slate-300'
+                                    }
+                                  />
+                                </div>
+                                {topic.summary ? <p className="mt-3 text-sm text-slate-300">{topic.summary}</p> : null}
+                                {topicSections.length === 0 ? null : (
+                                  <div className="mt-4 space-y-4">
+                                    {topicSections.map((section, sectionIndex) => {
+                                      const sectionTemplate = getTopicTemplateFromBlock(section);
+                                      const sectionHtml = sanitizeRichHtml(section.body_text ?? '');
+                                      const sectionMediaUrl = getRenderableMediaUrl(section);
+
+                                      return (
+                                        <div key={section.id} className="space-y-3 rounded-3xl border border-white/10 bg-slate-950/60 p-4">
+                                          <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400">
+                                            Section {sectionIndex + 1}
+                                          </p>
+                                          <div
+                                            className={`rounded-3xl border border-white/10 bg-slate-950/80 p-4 text-sm text-slate-200 ${
+                                              sectionTemplate === 'template-2' ? 'space-y-3' : ''
+                                            }`}
+                                          >
+                                            {sectionHtml ? (
+                                              <div dangerouslySetInnerHTML={{ __html: sectionHtml }} />
+                                            ) : (
+                                              <p className="text-sm text-slate-400">No text content.</p>
+                                            )}
+                                          </div>
+                                          {sectionMediaUrl ? (
+                                            <div className="rounded-3xl border border-white/10 bg-slate-950/80 p-4">
+                                              {section.content_type === 'video' || isVideoMediaUrl(sectionMediaUrl) ? (
+                                                <video
+                                                  src={sectionMediaUrl}
+                                                  controls
+                                                  className="w-full rounded-3xl object-contain"
+                                                />
+                                              ) : (
+                                                <img
+                                                  src={sectionMediaUrl}
+                                                  alt={`${topic.title} section ${sectionIndex + 1}`}
+                                                  className="w-full rounded-3xl object-contain"
+                                                />
+                                              )}
+                                            </div>
+                                          ) : null}
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {previewSelection.view === 'topic' && previewCurrentTopic ? (
+                    <div className="space-y-6">
+                      {previewCurrentTopic.summary ? (
+                        <div className="rounded-3xl border border-white/10 bg-slate-950/60 p-5 text-sm text-slate-200">
+                          <p>{previewCurrentTopic.summary}</p>
+                        </div>
+                      ) : null}
+                      {previewTopicSections.length === 0 ? (
+                        <p className="rounded-3xl border border-white/10 bg-slate-950/60 p-5 text-sm text-slate-400">
+                          No topic content yet.
+                        </p>
+                      ) : (
+                        previewTopicSections.map((section, sectionIndex) => {
+                          const sectionTemplate = getTopicTemplateFromBlock(section);
+                          const sectionHtml = sanitizeRichHtml(section.body_text ?? '');
+                          const sectionMediaUrl = getRenderableMediaUrl(section);
+
+                          return (
+                            <div key={section.id} className="space-y-3 rounded-3xl border border-white/10 bg-slate-950/60 p-5">
+                              <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400">
+                                Section {sectionIndex + 1}
+                              </p>
+                              <div className="rounded-3xl border border-white/10 bg-slate-950/80 p-4 text-sm text-slate-200">
                                 {sectionHtml ? (
                                   <div dangerouslySetInnerHTML={{ __html: sectionHtml }} />
                                 ) : (
                                   <p className="text-sm text-slate-400">No text content.</p>
                                 )}
                               </div>
-                              {hasSectionMedia ? (
-                                <div className="rounded-lg border border-white/10 bg-slate-950/60 p-3">
-                                  {isVideoMediaUrl(sectionMediaUrl) ? (
-                                    <video src={sectionMediaUrl} controls className="max-h-[260px] w-full rounded-md object-contain" />
+                              {sectionMediaUrl ? (
+                                <div className="rounded-3xl border border-white/10 bg-slate-950/80 p-4">
+                                  {section.content_type === 'video' || isVideoMediaUrl(sectionMediaUrl) ? (
+                                    <video
+                                      src={sectionMediaUrl}
+                                      controls
+                                      className="w-full rounded-3xl object-contain"
+                                    />
                                   ) : (
-                                    <img src={sectionMediaUrl} alt={`${previewCurrentTopic.title} section ${sectionIndex + 1}`} className="max-h-[260px] w-full rounded-md object-contain" />
+                                    <img
+                                      src={sectionMediaUrl}
+                                      alt={`${previewCurrentTopic.title} section ${sectionIndex + 1}`}
+                                      className="w-full rounded-3xl object-contain"
+                                    />
                                   )}
                                 </div>
                               ) : null}
                             </div>
-                          ) : (
-                            hasSectionMedia ? (
-                              <div
-                                className={`grid gap-3 xl:items-start ${
-                                  sectionTemplate === 'template-3'
-                                    ? 'xl:grid-cols-[320px_minmax(0,1fr)]'
-                                    : 'xl:grid-cols-[minmax(0,1fr)_320px]'
-                                }`}
-                              >
-                                <div className={`rounded-lg border border-white/10 bg-slate-950/60 p-3 text-sm text-slate-200 ${sectionTemplate === 'template-3' ? 'xl:order-2' : ''}`}>
-                                  {sectionHtml ? (
-                                    <div dangerouslySetInnerHTML={{ __html: sectionHtml }} />
-                                  ) : (
-                                    <p className="text-sm text-slate-400">No text content.</p>
-                                  )}
-                                </div>
-                                <div className={`rounded-lg border border-white/10 bg-slate-950/60 p-3 ${sectionTemplate === 'template-3' ? 'xl:order-1' : ''}`}>
-                                  {isVideoMediaUrl(sectionMediaUrl) ? (
-                                    <video src={sectionMediaUrl} controls className="max-h-[260px] w-full rounded-md object-contain" />
-                                  ) : (
-                                    <img src={sectionMediaUrl} alt={`${previewCurrentTopic.title} section ${sectionIndex + 1}`} className="max-h-[260px] w-full rounded-md object-contain" />
-                                  )}
-                                </div>
-                              </div>
-                            ) : (
-                              <div className="rounded-lg border border-white/10 bg-slate-950/60 p-3 text-sm text-slate-200">
-                                {sectionHtml ? (
-                                  <div dangerouslySetInnerHTML={{ __html: sectionHtml }} />
-                                ) : (
-                                  <p className="text-sm text-slate-400">No text content.</p>
-                                )}
-                              </div>
-                            )
-                          )}
+                          );
+                        })
+                      )}
+                    </div>
+                  ) : null}
+
+                  {(previewSelection.view === 'preTest' || previewSelection.view === 'postTest' || previewSelection.view === 'finalExam') && previewCurrentQuiz ? (
+                    <div className="space-y-6">
+                      <div className="rounded-3xl border border-white/10 bg-slate-950/60 p-5">
+                        <div className="grid gap-3 md:grid-cols-3 text-sm text-slate-300">
+                          <div>Passing: {previewCurrentQuiz.passing_score}%</div>
+                          <div>Time: {previewCurrentQuiz.time_limit_minutes} min</div>
+                          <div>Attempts: {previewCurrentQuiz.attempt_limit}</div>
                         </div>
-                      );
-                    })}
-                  </div>
-                ) : null}
-                {(previewSelection.view === 'preTest' || previewSelection.view === 'postTest' || previewSelection.view === 'finalExam') && previewCurrentQuiz ? <div className="space-y-3 rounded-xl border border-white/10 bg-slate-900/70 p-4"><h4 className="text-xl font-bold text-white">{previewCurrentQuiz.title}</h4><div className="grid gap-2 text-xs text-slate-300 md:grid-cols-3"><p>Passing: {previewCurrentQuiz.passing_score}%</p><p>Time: {previewCurrentQuiz.time_limit_minutes} min</p><p>Attempts: {previewCurrentQuiz.attempt_limit}</p></div>{(questionsByQuiz.get(previewCurrentQuiz.id) ?? []).map((question, questionIndex) => <div key={question.id} className="rounded-lg border border-white/10 bg-slate-950/60 p-3"><p className="text-xs font-semibold uppercase tracking-[0.13em] text-slate-400">Question {questionIndex + 1}</p><p className="mt-1 text-sm font-semibold text-white">{question.prompt}</p><div className="mt-2 space-y-1">{(answersByQuestion.get(question.id) ?? []).map((answer) => <p key={answer.id} className="rounded-md border border-white/10 px-2 py-1 text-sm text-slate-300">{answer.answer_text}</p>)}</div></div>)}</div> : null}
-                {previewSelection.view === 'finalExam' && !previewCurrentQuiz ? <p className="text-sm text-slate-400">Final exam has not been created yet.</p> : null}
+                      </div>
+                      {(questionsByQuiz.get(previewCurrentQuiz.id) ?? []).map((question, questionIndex) => (
+                        <div key={question.id} className="rounded-3xl border border-white/10 bg-slate-950/60 p-5">
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400">
+                            Question {questionIndex + 1}
+                          </p>
+                          <p className="mt-2 text-base font-semibold text-white">{question.prompt}</p>
+                          <div className="mt-4 grid gap-2 text-sm text-slate-300">
+                            {(answersByQuestion.get(question.id) ?? []).map((answer) => (
+                              <p
+                                key={answer.id}
+                                className="rounded-2xl border border-white/10 bg-slate-950/80 px-3 py-2"
+                              >
+                                {answer.answer_text}
+                              </p>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+
+                  {previewSelection.view === 'finalExam' && !previewCurrentQuiz ? (
+                    <p className="rounded-3xl border border-white/10 bg-slate-950/60 p-5 text-sm text-slate-400">
+                      Final exam has not been created yet.
+                    </p>
+                  ) : null}
+                </div>
+
+                <div className="flex items-center justify-between border-t border-white/10 bg-slate-950 px-5 py-3">
+                  <button
+                    disabled={previewIndex <= 0}
+                    onClick={() => {
+                      const previous = sequence[previewIndex - 1];
+                      if (previous) setPreviewSelection(previous.selection);
+                    }}
+                    className="inline-flex items-center gap-1 rounded-full border border-white/20 px-3 py-1.5 text-xs font-semibold text-slate-200 disabled:opacity-40"
+                  >
+                    <ChevronLeft size={14} /> Previous
+                  </button>
+                  <p className="text-xs font-semibold text-slate-400">
+                    {previewIndex >= 0 ? `${previewIndex + 1} / ${sequence.length}` : `0 / ${sequence.length}`}
+                  </p>
+                  <button
+                    disabled={previewIndex < 0 || previewIndex >= sequence.length - 1}
+                    onClick={() => {
+                      const next = sequence[previewIndex + 1];
+                      if (next) setPreviewSelection(next.selection);
+                    }}
+                    className="inline-flex items-center gap-1 rounded-full bg-brand-500 px-3 py-1.5 text-xs font-semibold text-slate-950 disabled:opacity-40"
+                  >
+                    Next <ChevronRight size={14} />
+                  </button>
+                </div>
               </div>
             </div>
-            <div className="flex items-center justify-between border-t border-white/10 bg-slate-900 px-5 py-3"><button disabled={previewIndex <= 0} onClick={() => { const previous = sequence[previewIndex - 1]; if (previous) setPreviewSelection(previous.selection); }} className="inline-flex items-center gap-1 rounded-full border border-white/20 px-3 py-1.5 text-xs font-semibold text-slate-200 disabled:opacity-40"><ChevronLeft size={14} />Previous</button><p className="text-xs font-semibold text-slate-400">{previewIndex >= 0 ? `${previewIndex + 1} / ${sequence.length}` : `0 / ${sequence.length}`}</p><button disabled={previewIndex < 0 || previewIndex >= sequence.length - 1} onClick={() => { const next = sequence[previewIndex + 1]; if (next) setPreviewSelection(next.selection); }} className="inline-flex items-center gap-1 rounded-full bg-brand-500 px-3 py-1.5 text-xs font-semibold text-slate-950 disabled:opacity-40">Next<ChevronRight size={14} /></button></div>
           </div>
         </div>
       ) : null}

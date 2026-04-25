@@ -30,6 +30,11 @@ export function applyTheme(theme: ThemeMode) {
   document.documentElement.setAttribute('data-theme', theme);
 }
 
+export function clearTheme() {
+  if (typeof document === 'undefined') return;
+  document.documentElement.removeAttribute('data-theme');
+}
+
 export function setTheme(theme: ThemeMode) {
   if (typeof window !== 'undefined') {
     window.localStorage.setItem(THEME_STORAGE_KEY, theme);
