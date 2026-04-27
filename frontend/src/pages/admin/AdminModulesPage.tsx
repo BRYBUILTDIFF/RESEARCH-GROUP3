@@ -1,17 +1,22 @@
 
 import { ChangeEvent, FormEvent, MouseEvent as ReactMouseEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { ModuleViewerPage } from '../user/ModuleViewerPage';
 import {
   AlignCenter,
   AlignJustify,
   AlignLeft,
   AlignRight,
+  AlertTriangle,
   ArrowLeft,
+  CheckCircle2,
   ChevronLeft,
   ChevronRight,
   Eye,
   List,
   ListOrdered,
+  Lock,
+  LockOpen,
   Pencil,
   Plus,
   Search,
@@ -75,6 +80,33 @@ type ModuleForm = {
   isLocked: boolean;
 };
 
+type TextAlignState = 'left' | 'center' | 'right' | 'justify';
+type LessonToolbarState = {
+  bold: boolean;
+  italic: boolean;
+  underline: boolean;
+  unorderedList: boolean;
+  orderedList: boolean;
+  align: TextAlignState;
+  fontSize: string;
+  foreColor: string;
+};
+type TopicToolbarStateBySection = Record<number, LessonToolbarState>;
+
+type NotificationPopup = {
+  id: number;
+  message: string;
+  tone: 'success' | 'info';
+};
+
+type ConfirmationDialog = {
+  title: string;
+  message: string;
+  confirmLabel: string;
+  tone: 'danger' | 'brand';
+  onConfirm: () => void | Promise<void>;
+};
+
 const MODULE_CATEGORIES = ['Hardware', 'Software', 'Security'];
 
 function normalizeModuleCategory(category: string | null | undefined): string {
@@ -100,6 +132,17 @@ function normalizeQuestionType(value: string | null | undefined): BuilderQuestio
   return value === 'multiple_choice' ? 'multiple_choice' : 'single_choice';
 }
 
+function normalizeQuestionMaxSelections(
+  questionType: BuilderQuestionType,
+  value: number | string | null | undefined,
+  fallback = 1
+): number {
+  if (questionType === 'single_choice') return 1;
+  const parsed = Number(value);
+  const normalized = Number.isFinite(parsed) ? Math.floor(parsed) : fallback;
+  return Math.max(1, normalized);
+}
+
 const editorToolbarGroupClass =
   'inline-flex items-center gap-1 rounded-md border border-white/10 bg-slate-950/60 px-1 py-1';
 const editorToolbarButtonClass =
@@ -107,6 +150,67 @@ const editorToolbarButtonClass =
 const editorToolbarIconButtonClass =
   'inline-flex h-7 w-7 items-center justify-center rounded border border-white/15 text-slate-200 transition hover:bg-white/10';
 const editorToolbarSelectClass = 'h-7 rounded border border-white/15 bg-slate-900 px-2 text-xs text-slate-200';
+const lessonToolbarDefaultState: LessonToolbarState = {
+  bold: false,
+  italic: false,
+  underline: false,
+  unorderedList: false,
+  orderedList: false,
+  align: 'left',
+  fontSize: '',
+  foreColor: '',
+};
+const LESSON_FONT_SIZE_OPTIONS = ['12', '14', '16', '18', '20', '24', '28', '32'] as const;
+const LESSON_FONT_COLOR_OPTIONS = ['#f5c800', '#4a8fe8', '#4caf7d', '#e05c5c', '#e8eaf0'] as const;
+const TOPIC_FONT_SIZE_OPTIONS = ['12', '14', '16', '18', '20', '24', '28', '32'] as const;
+const TOPIC_FONT_COLOR_OPTIONS = ['#f5c800', '#4a8fe8', '#4caf7d', '#e05c5c', '#e8eaf0'] as const;
+const LEGACY_FONT_SIZE_TO_PX: Record<string, number> = {
+  '1': 10,
+  '2': 13,
+  '3': 16,
+  '4': 18,
+  '5': 24,
+  '6': 32,
+  '7': 48,
+};
+const LEGACY_FONT_SIZE_KEYWORDS = new Set([
+  'xx-small',
+  'x-small',
+  'small',
+  'medium',
+  'large',
+  'x-large',
+  'xx-large',
+  'xxx-large',
+  '-webkit-xxx-large',
+  'smaller',
+  'larger',
+]);
+
+function normalizeCommandColor(value: string | null | undefined): string {
+  const raw = (value ?? '').trim().toLowerCase().replace(/"/g, '');
+  if (!raw) return '';
+
+  if (/^#[0-9a-f]{3}$/i.test(raw)) {
+    return `#${raw[1]}${raw[1]}${raw[2]}${raw[2]}${raw[3]}${raw[3]}`;
+  }
+  if (/^#[0-9a-f]{6}$/i.test(raw)) return raw;
+
+  const rgbMatch = raw.match(/^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})/i);
+  if (rgbMatch) {
+    const toHex = (channel: string) => Math.max(0, Math.min(255, Number(channel))).toString(16).padStart(2, '0');
+    return `#${toHex(rgbMatch[1])}${toHex(rgbMatch[2])}${toHex(rgbMatch[3])}`;
+  }
+
+  if (/^\d+$/.test(raw)) {
+    const numeric = Number(raw);
+    if (Number.isFinite(numeric)) {
+      return `#${(numeric & 0xffffff).toString(16).padStart(6, '0')}`;
+    }
+  }
+
+  return raw;
+}
 
 function selectionKey(selection: BuilderSelection): string {
   if (selection.view === 'builderHome') return 'builderHome';
@@ -245,6 +349,8 @@ export function AdminModulesPage() {
   const [addLessonId, setAddLessonId] = useState<number | null>(null);
 
   const [previewSelection, setPreviewSelection] = useState<BuilderSelection>({ view: 'builderHome' });
+  const [previewSnapshot, setPreviewSnapshot] = useState<ModuleBuilderPayload | null>(null);
+  const [previewBypassLocks, setPreviewBypassLocks] = useState(false);
   const lessonContentEditorRef = useRef<HTMLDivElement | null>(null);
   const topicSectionEditorRefs = useRef<Record<number, HTMLDivElement | null>>({});
   const lessonSelectionRangeRef = useRef<Range | null>(null);
@@ -252,7 +358,15 @@ export function AdminModulesPage() {
   const createThumbnailInputRef = useRef<HTMLInputElement | null>(null);
   const editThumbnailInputRef = useRef<HTMLInputElement | null>(null);
   const autoLoadBuilderModuleIdRef = useRef<number | null>(null);
+  const skipNextBuilderAutoLoadRef = useRef(false);
   const [activeTopicSectionId, setActiveTopicSectionId] = useState<number | null>(null);
+  const [notification, setNotification] = useState<NotificationPopup | null>(null);
+  const [notificationVisible, setNotificationVisible] = useState(false);
+  const notificationHideTimerRef = useRef<number | null>(null);
+  const notificationCleanupTimerRef = useRef<number | null>(null);
+  const [confirmationDialog, setConfirmationDialog] = useState<ConfirmationDialog | null>(null);
+  const [lessonToolbarState, setLessonToolbarState] = useState<LessonToolbarState>(lessonToolbarDefaultState);
+  const [topicToolbarStateBySection, setTopicToolbarStateBySection] = useState<TopicToolbarStateBySection>({});
 
   const run = async (task: () => Promise<void>) => {
     setBusy(true);
@@ -265,6 +379,79 @@ export function AdminModulesPage() {
       setBusy(false);
     }
   };
+
+  const clearNotificationTimers = () => {
+    if (notificationHideTimerRef.current !== null) {
+      window.clearTimeout(notificationHideTimerRef.current);
+      notificationHideTimerRef.current = null;
+    }
+    if (notificationCleanupTimerRef.current !== null) {
+      window.clearTimeout(notificationCleanupTimerRef.current);
+      notificationCleanupTimerRef.current = null;
+    }
+  };
+
+  const showNotification = (message: string, tone: NotificationPopup['tone'] = 'success') => {
+    clearNotificationTimers();
+    setNotification({ id: Date.now(), message, tone });
+    setNotificationVisible(false);
+    window.requestAnimationFrame(() => {
+      setNotificationVisible(true);
+    });
+
+    notificationHideTimerRef.current = window.setTimeout(() => {
+      setNotificationVisible(false);
+      notificationCleanupTimerRef.current = window.setTimeout(() => {
+        setNotification(null);
+      }, 220);
+    }, 2600);
+  };
+
+  const openConfirmation = (
+    { title, message, confirmLabel, tone }: Omit<ConfirmationDialog, 'onConfirm'>,
+    onConfirm: ConfirmationDialog['onConfirm']
+  ) => {
+    setConfirmationDialog({
+      title,
+      message,
+      confirmLabel,
+      tone,
+      onConfirm,
+    });
+  };
+
+  const closeConfirmation = () => {
+    setConfirmationDialog(null);
+  };
+
+  const confirmAction = () => {
+    if (!confirmationDialog) return;
+    const nextAction = confirmationDialog.onConfirm;
+    closeConfirmation();
+    void nextAction();
+  };
+
+  useEffect(() => {
+    return () => {
+      clearNotificationTimers();
+    };
+  }, []);
+
+  const lessonToolbarButtonClass = (active: boolean) =>
+    `${editorToolbarButtonClass} ${
+      active ? 'border-brand-400/70 bg-brand-500/20 text-brand-100 hover:bg-brand-500/30' : ''
+    }`;
+
+  const lessonToolbarIconButtonClass = (active: boolean) =>
+    `${editorToolbarIconButtonClass} ${
+      active ? 'border-brand-400/70 bg-brand-500/20 text-brand-100 hover:bg-brand-500/30' : ''
+    }`;
+
+  const lessonToolbarSelectStateClass = (active: boolean) =>
+    `${editorToolbarSelectClass} ${active ? 'border-brand-400/70 text-brand-100' : ''}`;
+
+  const getTopicToolbarState = (sectionId: number): LessonToolbarState =>
+    topicToolbarStateBySection[sectionId] ?? lessonToolbarDefaultState;
 
   const loadModules = async () => {
     const data = await getModules();
@@ -307,9 +494,9 @@ export function AdminModulesPage() {
   useEffect(() => {
     const moduleIdParam = Number(searchParams.get('moduleId'));
     const hasValidModuleParam = Number.isInteger(moduleIdParam) && moduleIdParam > 0;
+    const hasBuilderParam = searchParams.get('builder') === '1';
 
     if (builder) {
-      const hasBuilderParam = searchParams.get('builder') === '1';
       const hasCurrentModuleParam = searchParams.get('moduleId') === String(builder.module.id);
       if (!hasBuilderParam || !hasCurrentModuleParam) {
         const nextParams = new URLSearchParams(searchParams);
@@ -320,8 +507,17 @@ export function AdminModulesPage() {
       return;
     }
 
+    if (skipNextBuilderAutoLoadRef.current) {
+      skipNextBuilderAutoLoadRef.current = false;
+      return;
+    }
+
+    if (!hasBuilderParam) {
+      return;
+    }
+
     if (!hasValidModuleParam) {
-      if (searchParams.get('builder') === '1') {
+      if (hasBuilderParam) {
         const nextParams = new URLSearchParams(searchParams);
         nextParams.delete('builder');
         setSearchParams(nextParams, { replace: true });
@@ -439,6 +635,23 @@ export function AdminModulesPage() {
     });
   }, [selection.view, currentTopic?.id, selectedTopicSections]);
 
+  useEffect(() => {
+    const currentSectionIds = new Set(selectedTopicSections.map((section) => section.id));
+    setTopicToolbarStateBySection((prev) => {
+      let changed = false;
+      const next: TopicToolbarStateBySection = {};
+      for (const [sectionIdText, toolbarState] of Object.entries(prev)) {
+        const sectionId = Number(sectionIdText);
+        if (currentSectionIds.has(sectionId)) {
+          next[sectionId] = toolbarState;
+        } else {
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [selectedTopicSections]);
+
   const sequence = useMemo(() => {
     const list: Array<{ label: string; selection: BuilderSelection }> = [];
     if (preQuiz) {
@@ -518,9 +731,28 @@ export function AdminModulesPage() {
   const setQuestionTypeLocally = (questionId: number, questionType: BuilderQuestionType) => {
     setBuilder((prev) => {
       if (!prev) return prev;
+      const answerCount = prev.answers.filter((answer) => answer.question_id === questionId).length;
+      const previousQuestion = prev.questions.find((question) => question.id === questionId);
+      const previousMaxSelections = normalizeQuestionMaxSelections(
+        questionType,
+        previousQuestion?.max_selections,
+        questionType === 'multiple_choice' ? 2 : 1
+      );
+      const nextMaxSelections =
+        questionType === 'multiple_choice'
+          ? Math.max(
+              1,
+              Math.min(
+                previousMaxSelections === 1 && answerCount >= 2 ? 2 : previousMaxSelections,
+                Math.max(answerCount, 1)
+              )
+            )
+          : 1;
 
       const nextQuestions = prev.questions.map((question) =>
-        question.id === questionId ? { ...question, question_type: questionType } : question
+        question.id === questionId
+          ? { ...question, question_type: questionType, max_selections: nextMaxSelections }
+          : question
       );
 
       if (questionType !== 'single_choice') {
@@ -560,16 +792,25 @@ export function AdminModulesPage() {
     setShowEditModal(true);
   };
 
-  const handleDeleteModule = async (module: ModuleSummary) => {
-    const confirmed = window.confirm(`Delete module "${module.title}"? This cannot be undone.`);
-    if (!confirmed) return;
-    await run(async () => {
-      await deleteModule(module.id);
-      await loadModules();
-    });
+  const handleDeleteModule = (module: ModuleSummary) => {
+    openConfirmation(
+      {
+        title: 'Delete Module?',
+        message: `Delete module "${module.title}"? This action cannot be undone.`,
+        confirmLabel: 'Delete Module',
+        tone: 'danger',
+      },
+      () =>
+        run(async () => {
+          await deleteModule(module.id);
+          await loadModules();
+          showNotification('Module deleted successfully.');
+        })
+    );
   };
 
   const closeBuilderView = () => {
+    skipNextBuilderAutoLoadRef.current = true;
     setBuilder(null);
     setSelection({ view: 'builderHome' });
     autoLoadBuilderModuleIdRef.current = null;
@@ -577,6 +818,13 @@ export function AdminModulesPage() {
     nextParams.delete('builder');
     nextParams.delete('moduleId');
     setSearchParams(nextParams, { replace: true });
+  };
+
+  const handleBackToModules = () => {
+    closeBuilderView();
+    void run(async () => {
+      await loadModules();
+    });
   };
 
   const handleCreateModule = async (event: FormEvent) => {
@@ -685,24 +933,30 @@ export function AdminModulesPage() {
     event.preventDefault();
     if (!builder) return;
     await run(async () => {
+      let successMessage = '';
       if (addType === 'preTest') {
         if (preQuiz) throw new Error('Pre-Test already exists.');
         await createQuiz({ moduleId: builder.module.id, lessonId: null, title: addTitle.trim() || 'Pre-Test', quizType: 'lesson_quiz', stage: 'pre_test' });
         await loadBuilder(builder.module.id, { view: 'preTest' });
+        successMessage = 'Pre-Test added successfully.';
       } else if (addType === 'lesson') {
         const created = await createLesson({ moduleId: builder.module.id, title: addTitle.trim() || `Lesson ${lessons.length + 1}`, summary: '', estimatedMinutes: 10, overviewText: '' });
         await loadBuilder(builder.module.id, { view: 'lesson', lessonId: created.id });
+        successMessage = 'Lesson added successfully.';
       } else if (addType === 'topic') {
         if (!addLessonId) throw new Error('Select a lesson for the topic.');
         const created = await createTopic({ lessonId: addLessonId, title: addTitle.trim() || 'Topic', summary: '' });
         await loadBuilder(builder.module.id, { view: 'topic', lessonId: addLessonId, topicId: created.id });
+        successMessage = 'Topic added successfully.';
       } else if (addType === 'postTest') {
         if (!addLessonId) throw new Error('Select a lesson for the post-test.');
         if (postQuizByLesson.get(addLessonId)) throw new Error('Post-Test already exists for this lesson.');
         await createQuiz({ moduleId: builder.module.id, lessonId: addLessonId, title: addTitle.trim() || 'Post-Test', quizType: 'lesson_quiz', stage: 'post_test' });
         await loadBuilder(builder.module.id, { view: 'postTest', lessonId: addLessonId });
+        successMessage = 'Post-Test added successfully.';
       }
       setShowAddNodeModal(false);
+      if (successMessage) showNotification(successMessage);
     });
   };
 
@@ -711,26 +965,55 @@ export function AdminModulesPage() {
     await run(async () => {
       if (!finalQuiz) {
         await createQuiz({ moduleId: builder.module.id, lessonId: null, title: 'Final Exam', quizType: 'final_exam', stage: 'final_exam' });
+        showNotification('Final Exam added successfully.');
+      } else {
+        showNotification('Final Exam already exists.', 'info');
       }
       await loadBuilder(builder.module.id, { view: 'finalExam' });
     });
   };
 
-  const handleDeleteCurrentSelection = async () => {
+  const handleDeleteCurrentSelection = () => {
     if (!builder) return;
-    await run(async () => {
-      if (selection.view === 'lesson' && currentLesson) {
-        await deleteLesson(currentLesson.id);
-      } else if (selection.view === 'topic' && currentTopic) {
-        await deleteTopic(currentTopic.id);
-      } else if (selection.view === 'preTest' || selection.view === 'postTest' || selection.view === 'finalExam') {
-        if (!currentQuiz) throw new Error('No assessment exists to delete.');
-        await deleteQuiz(currentQuiz.id);
-      } else {
-        return;
-      }
-      await loadBuilder(builder.module.id);
-    });
+
+    const selectedLabel =
+      selection.view === 'lesson' && currentLesson
+        ? `Lesson "${currentLesson.title}"`
+        : selection.view === 'topic' && currentTopic
+          ? `Topic "${currentTopic.title}"`
+          : selection.view === 'preTest'
+            ? 'Pre-Test'
+            : selection.view === 'postTest'
+              ? 'Post-Test'
+              : selection.view === 'finalExam'
+                ? 'Final Exam'
+                : null;
+
+    if (!selectedLabel) return;
+
+    openConfirmation(
+      {
+        title: 'Delete Page?',
+        message: `Delete ${selectedLabel}? This action cannot be undone.`,
+        confirmLabel: 'Delete Page',
+        tone: 'danger',
+      },
+      () =>
+        run(async () => {
+          if (selection.view === 'lesson' && currentLesson) {
+            await deleteLesson(currentLesson.id);
+          } else if (selection.view === 'topic' && currentTopic) {
+            await deleteTopic(currentTopic.id);
+          } else if (selection.view === 'preTest' || selection.view === 'postTest' || selection.view === 'finalExam') {
+            if (!currentQuiz) throw new Error('No assessment exists to delete.');
+            await deleteQuiz(currentQuiz.id);
+          } else {
+            return;
+          }
+          await loadBuilder(builder.module.id);
+          showNotification(`${selectedLabel} deleted successfully.`);
+        })
+    );
   };
 
   const saveCurrentLesson = async () => {
@@ -748,6 +1031,7 @@ export function AdminModulesPage() {
         isPublished: currentLesson.is_published ?? true,
       });
       await loadBuilder(builder.module.id, { view: 'lesson', lessonId: currentLesson.id });
+      showNotification('Lesson saved successfully.');
     });
   };
 
@@ -786,20 +1070,26 @@ export function AdminModulesPage() {
         });
       }
       await loadBuilder(builder.module.id, { view: 'topic', lessonId: currentTopic.lesson_id, topicId: currentTopic.id });
+      showNotification('Topic saved successfully.');
     });
   };
 
   const createCurrentAssessment = async () => {
     if (!builder) return;
     await run(async () => {
+      let successMessage = '';
       if (selection.view === 'preTest') {
         await createQuiz({ moduleId: builder.module.id, lessonId: null, title: 'Pre-Test', quizType: 'lesson_quiz', stage: 'pre_test' });
+        successMessage = 'Pre-Test added successfully.';
       } else if (selection.view === 'postTest') {
         await createQuiz({ moduleId: builder.module.id, lessonId: selection.lessonId, title: 'Post-Test', quizType: 'lesson_quiz', stage: 'post_test' });
+        successMessage = 'Post-Test added successfully.';
       } else if (selection.view === 'finalExam') {
         await createQuiz({ moduleId: builder.module.id, lessonId: null, title: 'Final Exam', quizType: 'final_exam', stage: 'final_exam' });
+        successMessage = 'Final Exam added successfully.';
       }
       await loadBuilder(builder.module.id, selection);
+      if (successMessage) showNotification(successMessage);
     });
   };
 
@@ -817,6 +1107,7 @@ export function AdminModulesPage() {
         isActive: currentQuiz.is_active,
       });
       await loadBuilder(builder.module.id, selection);
+      showNotification('Assessment details saved successfully.');
     });
   };
 
@@ -840,6 +1131,7 @@ export function AdminModulesPage() {
       const created = await createQuizQuestion(currentQuiz.id, {
         prompt: `New Question ${nextQuestionNumber}`,
         questionType: 'single_choice',
+        maxSelections: 1,
         points: 1,
         sortOrder: nextSortOrder,
       });
@@ -861,6 +1153,11 @@ export function AdminModulesPage() {
 
     for (const question of questions) {
       const answers = answersByQuestion.get(question.id) ?? [];
+      const questionType = normalizeQuestionType(question.question_type);
+      const boundedMaxSelections =
+        questionType === 'multiple_choice'
+          ? normalizeQuestionMaxSelections(questionType, question.max_selections, 2)
+          : 1;
       if (!answers.length) {
         setError('Each question needs at least one choice.');
         return;
@@ -869,18 +1166,39 @@ export function AdminModulesPage() {
         setError('At least one correct choice must be selected for every question.');
         return;
       }
+      if (questionType === 'multiple_choice') {
+        const correctCount = answers.filter((answer) => Boolean(answer.is_correct)).length;
+        const maxAllowedByChoices = Math.max(1, Math.min(boundedMaxSelections, answers.length));
+        if (correctCount > maxAllowedByChoices) {
+          setError('For multiple-choice questions, Max Checks must be at least the number of correct choices.');
+          return;
+        }
+      }
     }
 
     await run(async () => {
       await Promise.all(
-        questions.map((question) =>
-          updateQuizQuestion(question.id, {
+        questions.map((question) => {
+          const questionType = normalizeQuestionType(question.question_type);
+          const answerCount = (answersByQuestion.get(question.id) ?? []).length;
+          const normalizedMaxSelections =
+            questionType === 'multiple_choice'
+              ? Math.max(
+                  1,
+                  Math.min(
+                    normalizeQuestionMaxSelections(questionType, question.max_selections, 2),
+                    Math.max(answerCount, 1)
+                  )
+                )
+              : 1;
+          return updateQuizQuestion(question.id, {
             prompt: question.prompt,
-            questionType: normalizeQuestionType(question.question_type),
+            questionType,
+            maxSelections: normalizedMaxSelections,
             points: question.points,
             sortOrder: question.sort_order,
-          })
-        )
+          });
+        })
       );
 
       const answerUpdates: Promise<unknown>[] = [];
@@ -899,6 +1217,7 @@ export function AdminModulesPage() {
       }
       await Promise.all(answerUpdates);
       await loadBuilder(builder.module.id, selection);
+      showNotification('All questions saved successfully.');
     });
   };
 
@@ -973,6 +1292,7 @@ export function AdminModulesPage() {
     updateLessonLocal(currentLesson.id, {
       overview_image_url: serializeLessonOverviewMediaUrls(nextMediaUrls),
     });
+    showNotification('Lesson image/video uploaded successfully.');
   };
 
   const removeLessonMediaAt = (mediaIndex: number) => {
@@ -1014,6 +1334,7 @@ export function AdminModulesPage() {
         isRequired: section.is_required,
       });
       await loadBuilder(builder.module.id, { view: 'topic', lessonId: currentTopic.lesson_id, topicId: currentTopic.id });
+      showNotification('Topic image/video uploaded successfully.');
     });
   };
 
@@ -1061,6 +1382,7 @@ export function AdminModulesPage() {
         sortOrder: nextSortOrder,
       });
       await loadBuilder(builder.module.id, { view: 'topic', lessonId: currentTopic.lesson_id, topicId: currentTopic.id });
+      showNotification('Topic section added successfully.');
     });
   };
 
@@ -1120,29 +1442,219 @@ export function AdminModulesPage() {
     if (!range) return false;
     const selectionRange = window.getSelection();
     if (!selectionRange) return false;
-    selectionRange.removeAllRanges();
-    selectionRange.addRange(range);
+    try {
+      selectionRange.removeAllRanges();
+      selectionRange.addRange(range);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const normalizeFontSizePxValue = (value: string | number | null | undefined): number | null => {
+    const raw = String(value ?? '')
+      .trim()
+      .toLowerCase()
+      .replace(/px$/, '');
+    if (!raw) return null;
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed)) return null;
+    const rounded = Math.round(parsed);
+    if (rounded < 8 || rounded > 96) return null;
+    return rounded;
+  };
+
+  const getSelectionAnchorElement = (editor: HTMLElement): HTMLElement | null => {
+    const selectionRange = window.getSelection();
+    if (!selectionRange || selectionRange.rangeCount === 0) return null;
+    const range = selectionRange.getRangeAt(0);
+    if (!editor.contains(range.startContainer)) return null;
+    const startNode = range.startContainer;
+    if (startNode.nodeType === Node.ELEMENT_NODE) return startNode as HTMLElement;
+    return startNode.parentElement;
+  };
+
+  const resolveSelectionFontSizePx = (editor: HTMLElement): string => {
+    const anchor = getSelectionAnchorElement(editor);
+    const computedFontSize = anchor ? window.getComputedStyle(anchor).fontSize : '';
+    const pxMatch = computedFontSize.match(/^(\d+(?:\.\d+)?)px$/i);
+    if (pxMatch) return String(Math.round(Number(pxMatch[1])));
+
+    const commandSize = String(document.queryCommandValue('fontSize') ?? '')
+      .trim()
+      .replace(/"/g, '');
+    if (LEGACY_FONT_SIZE_TO_PX[commandSize]) return String(LEGACY_FONT_SIZE_TO_PX[commandSize]);
+    const normalized = normalizeFontSizePxValue(commandSize);
+    return normalized ? String(normalized) : '';
+  };
+
+  const resolveSelectionForeColor = (editor: HTMLElement): string => {
+    const anchor = getSelectionAnchorElement(editor);
+    const computedColor = anchor ? normalizeCommandColor(window.getComputedStyle(anchor).color) : '';
+    if (computedColor) return computedColor;
+    return normalizeCommandColor(String(document.queryCommandValue('foreColor') ?? ''));
+  };
+
+  const normalizeEditorFontTagsToPx = (editor: HTMLElement, appliedPx: number) => {
+    const fontNodes = Array.from(editor.querySelectorAll('font'));
+    for (const node of fontNodes) {
+      const font = node as HTMLFontElement;
+      const sizeAttr = font.getAttribute('size')?.trim() ?? '';
+      const mappedPx =
+        sizeAttr === '7'
+          ? appliedPx
+          : LEGACY_FONT_SIZE_TO_PX[sizeAttr] ?? normalizeFontSizePxValue(font.style.fontSize) ?? appliedPx;
+
+      const span = document.createElement('span');
+      if (font.style.cssText) span.style.cssText = font.style.cssText;
+      const colorAttr = font.getAttribute('color');
+      if (colorAttr) span.style.color = normalizeCommandColor(colorAttr);
+      span.style.fontSize = `${mappedPx}px`;
+
+      while (font.firstChild) span.appendChild(font.firstChild);
+      font.replaceWith(span);
+    }
+  };
+
+  const normalizeInlineFontSizeStyles = (editor: HTMLElement, appliedPx: number) => {
+    const nodes = Array.from(editor.querySelectorAll<HTMLElement>('[style*="font-size"]'));
+    for (const node of nodes) {
+      const rawFontSize = (node.style.fontSize ?? '').trim().toLowerCase();
+      if (!rawFontSize) continue;
+
+      const numericPx = normalizeFontSizePxValue(rawFontSize);
+      const shouldOverride =
+        LEGACY_FONT_SIZE_KEYWORDS.has(rawFontSize) ||
+        rawFontSize.endsWith('em') ||
+        rawFontSize.endsWith('rem') ||
+        rawFontSize.endsWith('%') ||
+        numericPx === LEGACY_FONT_SIZE_TO_PX['7'];
+
+      if (shouldOverride) {
+        node.style.fontSize = `${appliedPx}px`;
+      }
+    }
+  };
+
+  const applyFontSizePxCommand = (editor: HTMLElement, value: string | number | undefined): boolean => {
+    const pxSize = normalizeFontSizePxValue(value);
+    if (!pxSize) {
+      setError('Enter a valid font size in px (8-96).');
+      return false;
+    }
+
+    document.execCommand('styleWithCSS', false, 'false');
+    document.execCommand('fontSize', false, '7');
+    normalizeEditorFontTagsToPx(editor, pxSize);
+    normalizeInlineFontSizeStyles(editor, pxSize);
     return true;
+  };
+
+  const isWholeEditorRange = (editor: HTMLElement, range: Range) => {
+    try {
+      const fullRange = document.createRange();
+      fullRange.selectNodeContents(editor);
+      const startsAtBeginning = range.compareBoundaryPoints(Range.START_TO_START, fullRange) === 0;
+      const endsAtEnd = range.compareBoundaryPoints(Range.END_TO_END, fullRange) === 0;
+      return startsAtBeginning && endsAtEnd;
+    } catch {
+      return false;
+    }
+  };
+
+  const shouldPreventWholeEditorFormat = (command: string) =>
+    command === 'bold' ||
+    command === 'italic' ||
+    command === 'underline' ||
+    command === 'fontSize' ||
+    command === 'foreColor' ||
+    command === 'insertUnorderedList' ||
+    command === 'insertOrderedList' ||
+    command === 'justifyLeft' ||
+    command === 'justifyCenter' ||
+    command === 'justifyRight' ||
+    command === 'justifyFull';
+
+  const buildToolbarStateFromEditorSelection = (editor: HTMLElement): LessonToolbarState | null => {
+    const selectionRange = window.getSelection();
+    if (!selectionRange || selectionRange.rangeCount === 0) return null;
+    const range = selectionRange.getRangeAt(0);
+    if (!editor.contains(range.startContainer) || !editor.contains(range.endContainer)) return null;
+
+    const align: TextAlignState = document.queryCommandState('justifyCenter')
+      ? 'center'
+      : document.queryCommandState('justifyRight')
+        ? 'right'
+        : document.queryCommandState('justifyFull')
+          ? 'justify'
+          : 'left';
+
+    const fontSizeValue = resolveSelectionFontSizePx(editor);
+    const foreColorValue = resolveSelectionForeColor(editor);
+
+    return {
+      bold: Boolean(document.queryCommandState('bold')),
+      italic: Boolean(document.queryCommandState('italic')),
+      underline: Boolean(document.queryCommandState('underline')),
+      unorderedList: Boolean(document.queryCommandState('insertUnorderedList')),
+      orderedList: Boolean(document.queryCommandState('insertOrderedList')),
+      align,
+      fontSize: fontSizeValue,
+      foreColor: foreColorValue,
+    };
+  };
+
+  const syncLessonToolbarState = () => {
+    const editor = lessonContentEditorRef.current;
+    if (!editor) return;
+    const toolbarState = buildToolbarStateFromEditorSelection(editor);
+    if (!toolbarState) return;
+    setLessonToolbarState(toolbarState);
+  };
+
+  const syncTopicToolbarState = (sectionId: number) => {
+    const editor = topicSectionEditorRefs.current[sectionId];
+    if (!editor) return;
+    const toolbarState = buildToolbarStateFromEditorSelection(editor);
+    if (!toolbarState) return;
+    setTopicToolbarStateBySection((prev) => ({ ...prev, [sectionId]: toolbarState }));
   };
 
   const rememberLessonEditorSelection = () => {
     const editor = lessonContentEditorRef.current;
     if (!editor) {
       lessonSelectionRangeRef.current = null;
+      setLessonToolbarState(lessonToolbarDefaultState);
       return;
     }
     const range = getSelectionRangeInsideEditor(editor);
     lessonSelectionRangeRef.current = range ? range.cloneRange() : null;
+    if (!range) {
+      setLessonToolbarState(lessonToolbarDefaultState);
+      return;
+    }
+    syncLessonToolbarState();
   };
 
   const rememberTopicEditorSelection = (sectionId: number) => {
     const editor = topicSectionEditorRefs.current[sectionId];
     if (!editor) {
       topicSelectionRangeRefs.current[sectionId] = null;
+      setTopicToolbarStateBySection((prev) => {
+        if (!(sectionId in prev)) return prev;
+        const next = { ...prev };
+        delete next[sectionId];
+        return next;
+      });
       return;
     }
     const range = getSelectionRangeInsideEditor(editor);
     topicSelectionRangeRefs.current[sectionId] = range ? range.cloneRange() : null;
+    if (!range) {
+      setTopicToolbarStateBySection((prev) => ({ ...prev, [sectionId]: lessonToolbarDefaultState }));
+      return;
+    }
+    syncTopicToolbarState(sectionId);
   };
 
   const preventToolbarButtonBlur = (event: ReactMouseEvent<HTMLButtonElement>) => {
@@ -1160,8 +1672,17 @@ export function AdminModulesPage() {
       setError('Highlight text first before using formatting tools.');
       return;
     }
+    if (shouldPreventWholeEditorFormat(command) && isWholeEditorRange(editor, currentRange)) {
+      setError('Formatting the entire lesson text at once is disabled. Select specific text only.');
+      return;
+    }
 
-    document.execCommand(command, false, value ?? null);
+    if (command === 'fontSize') {
+      const applied = applyFontSizePxCommand(editor, value);
+      if (!applied) return;
+    } else {
+      document.execCommand(command, false, value ?? null);
+    }
     setError('');
     rememberLessonEditorSelection();
   };
@@ -1172,20 +1693,66 @@ export function AdminModulesPage() {
 
     editor.focus();
     restoreSelectionRange(topicSelectionRangeRefs.current[sectionId] ?? null);
-    const currentRange = getSelectionRangeInsideEditor(editor);
-    if (!currentRange || currentRange.collapsed) {
-      setError('Highlight text first before using formatting tools.');
+    let currentRange = getSelectionRangeInsideEditor(editor);
+    if (!currentRange) {
+      const selectionRange = window.getSelection();
+      if (selectionRange) {
+        const fallbackRange = document.createRange();
+        fallbackRange.selectNodeContents(editor);
+        fallbackRange.collapse(false);
+        selectionRange.removeAllRanges();
+        selectionRange.addRange(fallbackRange);
+      }
+      currentRange = getSelectionRangeInsideEditor(editor);
+    }
+
+    const requiresHighlightedText =
+      command === 'fontSize' ||
+      command === 'foreColor' ||
+      command === 'justifyLeft' ||
+      command === 'justifyCenter' ||
+      command === 'justifyRight' ||
+      command === 'justifyFull';
+    if (!currentRange || (requiresHighlightedText && currentRange.collapsed)) {
+      if (command.startsWith('justify')) {
+        setError('Highlight text in this section first before applying alignment.');
+      } else {
+        setError('Highlight text first before using text size or color.');
+      }
+      return;
+    }
+    if (currentRange && !currentRange.collapsed && shouldPreventWholeEditorFormat(command) && isWholeEditorRange(editor, currentRange)) {
+      setError('Formatting the entire topic text at once is disabled. Select specific text only.');
       return;
     }
 
-    document.execCommand(command, false, value ?? null);
+    if (command === 'fontSize') {
+      const applied = applyFontSizePxCommand(editor, value);
+      if (!applied) return;
+    } else {
+      document.execCommand(command, false, value ?? null);
+    }
     setError('');
     rememberTopicEditorSelection(sectionId);
   };
 
   const openPreview = () => {
-    setPreviewSelection(selection);
-    setShowPreviewModal(true);
+    openConfirmation(
+      {
+        title: 'Open Student Preview?',
+        message: 'View this page as a learner to confirm the user experience.',
+        confirmLabel: 'Open Preview',
+        tone: 'brand',
+      },
+      () => {
+        if (!builder) return;
+        setPreviewSelection(selection);
+        setPreviewSnapshot(JSON.parse(JSON.stringify(builder)) as ModuleBuilderPayload);
+        setPreviewBypassLocks(false);
+        setShowPreviewModal(true);
+        showNotification('Student preview opened.', 'info');
+      }
+    );
   };
 
   const previewNodeLabel = sequence[previewIndex]?.label ?? 'Preview';
@@ -1241,10 +1808,37 @@ export function AdminModulesPage() {
     if (item.selection.view === 'finalExam') return 'Simulation';
     return 'Lesson';
   };
+  const hasPresetLessonFontSize = LESSON_FONT_SIZE_OPTIONS.includes(
+    lessonToolbarState.fontSize as (typeof LESSON_FONT_SIZE_OPTIONS)[number]
+  );
+  const hasPresetLessonColor = LESSON_FONT_COLOR_OPTIONS.includes(
+    lessonToolbarState.foreColor as (typeof LESSON_FONT_COLOR_OPTIONS)[number]
+  );
 
   return (
     <section className="space-y-5">
       {error ? <p className="rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{error}</p> : null}
+      {notification ? (
+        <div
+          key={notification.id}
+          className={`fixed right-5 top-5 z-[80] transition-all duration-300 ${
+            notificationVisible ? 'translate-y-0 opacity-100' : '-translate-y-3 opacity-0'
+          }`}
+        >
+          <div
+            className={`flex items-start gap-2 rounded-xl border px-4 py-3 shadow-2xl backdrop-blur-sm ${
+              notification.tone === 'success'
+                ? 'border-emerald-400/35 bg-emerald-500/15 text-emerald-100'
+                : 'border-sky-400/35 bg-sky-500/15 text-sky-100'
+            }`}
+            role="status"
+            aria-live="polite"
+          >
+            {notification.tone === 'success' ? <CheckCircle2 size={17} className="mt-0.5 shrink-0" /> : <Eye size={17} className="mt-0.5 shrink-0" />}
+            <p className="text-sm font-medium">{notification.message}</p>
+          </div>
+        </div>
+      ) : null}
 
       {!builder ? (
         <div className="space-y-5">
@@ -1361,7 +1955,7 @@ export function AdminModulesPage() {
                 <Eye size={13} />
                 Preview
               </button>
-              <button onClick={closeBuilderView} className="inline-flex items-center gap-1 rounded-md border border-white/20 px-3 py-1.5 text-xs font-semibold text-slate-200 hover:bg-white/10"><ArrowLeft size={13} />Back</button>
+              <button type="button" onClick={handleBackToModules} className="inline-flex items-center gap-1 rounded-md border border-white/20 px-3 py-1.5 text-xs font-semibold text-slate-200 hover:bg-white/10"><ArrowLeft size={13} />Back</button>
             </div>
           </div>
 
@@ -1469,16 +2063,37 @@ export function AdminModulesPage() {
                             <div className="flex h-[min(61vh,760px)] min-h-[520px] flex-col overflow-hidden rounded-md border border-white/15 bg-slate-900/70">
                               <div className="flex flex-wrap items-center gap-2 border-b border-white/10 p-2">
                                 <div className={editorToolbarGroupClass}>
-                                  <button type="button" onMouseDown={preventToolbarButtonBlur} onClick={() => applyLessonContentCommand('bold')} className={editorToolbarButtonClass}>B</button>
-                                  <button type="button" onMouseDown={preventToolbarButtonBlur} onClick={() => applyLessonContentCommand('italic')} className={`${editorToolbarButtonClass} italic`}>I</button>
-                                  <button type="button" onMouseDown={preventToolbarButtonBlur} onClick={() => applyLessonContentCommand('underline')} className={`${editorToolbarButtonClass} underline`}>U</button>
+                                  <button
+                                    type="button"
+                                    onMouseDown={preventToolbarButtonBlur}
+                                    onClick={() => applyLessonContentCommand('bold')}
+                                    className={lessonToolbarButtonClass(lessonToolbarState.bold)}
+                                  >
+                                    B
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onMouseDown={preventToolbarButtonBlur}
+                                    onClick={() => applyLessonContentCommand('italic')}
+                                    className={`${lessonToolbarButtonClass(lessonToolbarState.italic)} italic`}
+                                  >
+                                    I
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onMouseDown={preventToolbarButtonBlur}
+                                    onClick={() => applyLessonContentCommand('underline')}
+                                    className={`${lessonToolbarButtonClass(lessonToolbarState.underline)} underline`}
+                                  >
+                                    U
+                                  </button>
                                 </div>
                                 <div className={editorToolbarGroupClass}>
                                   <button
                                     type="button"
                                     onMouseDown={preventToolbarButtonBlur}
                                     onClick={() => applyLessonContentCommand('insertUnorderedList')}
-                                    className={editorToolbarIconButtonClass}
+                                    className={lessonToolbarIconButtonClass(lessonToolbarState.unorderedList)}
                                     title="Bulleted list"
                                     aria-label="Bulleted list"
                                   >
@@ -1488,7 +2103,7 @@ export function AdminModulesPage() {
                                     type="button"
                                     onMouseDown={preventToolbarButtonBlur}
                                     onClick={() => applyLessonContentCommand('insertOrderedList')}
-                                    className={editorToolbarIconButtonClass}
+                                    className={lessonToolbarIconButtonClass(lessonToolbarState.orderedList)}
                                     title="Numbered list"
                                     aria-label="Numbered list"
                                   >
@@ -1500,7 +2115,7 @@ export function AdminModulesPage() {
                                     type="button"
                                     onMouseDown={preventToolbarButtonBlur}
                                     onClick={() => applyLessonContentCommand('justifyLeft')}
-                                    className={editorToolbarIconButtonClass}
+                                    className={lessonToolbarIconButtonClass(lessonToolbarState.align === 'left')}
                                     title="Align left"
                                     aria-label="Align left"
                                   >
@@ -1510,7 +2125,7 @@ export function AdminModulesPage() {
                                     type="button"
                                     onMouseDown={preventToolbarButtonBlur}
                                     onClick={() => applyLessonContentCommand('justifyCenter')}
-                                    className={editorToolbarIconButtonClass}
+                                    className={lessonToolbarIconButtonClass(lessonToolbarState.align === 'center')}
                                     title="Align center"
                                     aria-label="Align center"
                                   >
@@ -1520,7 +2135,7 @@ export function AdminModulesPage() {
                                     type="button"
                                     onMouseDown={preventToolbarButtonBlur}
                                     onClick={() => applyLessonContentCommand('justifyRight')}
-                                    className={editorToolbarIconButtonClass}
+                                    className={lessonToolbarIconButtonClass(lessonToolbarState.align === 'right')}
                                     title="Align right"
                                     aria-label="Align right"
                                   >
@@ -1530,7 +2145,7 @@ export function AdminModulesPage() {
                                     type="button"
                                     onMouseDown={preventToolbarButtonBlur}
                                     onClick={() => applyLessonContentCommand('justifyFull')}
-                                    className={editorToolbarIconButtonClass}
+                                    className={lessonToolbarIconButtonClass(lessonToolbarState.align === 'justify')}
                                     title="Justify"
                                     aria-label="Justify"
                                   >
@@ -1539,41 +2154,56 @@ export function AdminModulesPage() {
                                 </div>
                                 <div className={editorToolbarGroupClass}>
                                   <select
-                                    defaultValue=""
+                                    value={lessonToolbarState.fontSize}
                                     onMouseDown={rememberLessonEditorSelection}
                                     onChange={(event) => {
                                       const value = event.target.value;
                                       if (!value) return;
                                       applyLessonContentCommand('fontSize', value);
-                                      event.target.value = '';
                                     }}
-                                    className={editorToolbarSelectClass}
+                                    className={lessonToolbarSelectStateClass(Boolean(lessonToolbarState.fontSize))}
                                   >
                                     <option value="">Size</option>
-                                    <option value="2">Small</option>
-                                    <option value="3">Normal</option>
-                                    <option value="5">Large</option>
-                                    <option value="6">X-Large</option>
+                                    {!hasPresetLessonFontSize && lessonToolbarState.fontSize ? (
+                                      <option value={lessonToolbarState.fontSize}>Current ({lessonToolbarState.fontSize}px)</option>
+                                    ) : null}
+                                    <option value="12">12px</option>
+                                    <option value="14">14px</option>
+                                    <option value="16">16px</option>
+                                    <option value="18">18px</option>
+                                    <option value="20">20px</option>
+                                    <option value="24">24px</option>
+                                    <option value="28">28px</option>
+                                    <option value="32">32px</option>
                                   </select>
                                   <select
-                                    defaultValue=""
+                                    value={lessonToolbarState.foreColor}
                                     onMouseDown={rememberLessonEditorSelection}
                                     onChange={(event) => {
                                       const value = event.target.value;
                                       if (!value) return;
                                       applyLessonContentCommand('foreColor', value);
-                                      event.target.value = '';
                                     }}
-                                    className={editorToolbarSelectClass}
+                                    className={lessonToolbarSelectStateClass(Boolean(lessonToolbarState.foreColor))}
                                   >
                                     <option value="">Color</option>
+                                    {!hasPresetLessonColor && lessonToolbarState.foreColor ? (
+                                      <option value={lessonToolbarState.foreColor}>Current ({lessonToolbarState.foreColor})</option>
+                                    ) : null}
                                     <option value="#f5c800">Yellow</option>
                                     <option value="#4a8fe8">Blue</option>
                                     <option value="#4caf7d">Green</option>
                                     <option value="#e05c5c">Red</option>
                                     <option value="#e8eaf0">White</option>
                                   </select>
-                                  <button type="button" onMouseDown={preventToolbarButtonBlur} onClick={() => applyLessonContentCommand('removeFormat')} className={editorToolbarButtonClass}>Clear</button>
+                                  <button
+                                    type="button"
+                                    onMouseDown={preventToolbarButtonBlur}
+                                    onClick={() => applyLessonContentCommand('removeFormat')}
+                                    className={editorToolbarButtonClass}
+                                  >
+                                    Clear
+                                  </button>
                                 </div>
                               </div>
                               <div
@@ -1711,6 +2341,13 @@ export function AdminModulesPage() {
                           const sectionTemplate = getTopicTemplateFromBlock(section);
                           const sectionMediaUrl = getRenderableMediaUrl(section);
                           const hasSectionMedia = Boolean(sectionMediaUrl);
+                          const topicToolbarState = getTopicToolbarState(section.id);
+                          const hasPresetTopicFontSize = TOPIC_FONT_SIZE_OPTIONS.includes(
+                            topicToolbarState.fontSize as (typeof TOPIC_FONT_SIZE_OPTIONS)[number]
+                          );
+                          const hasPresetTopicColor = TOPIC_FONT_COLOR_OPTIONS.includes(
+                            topicToolbarState.foreColor as (typeof TOPIC_FONT_COLOR_OPTIONS)[number]
+                          );
                           return (
                             <div
                               key={section.id}
@@ -1838,18 +2475,39 @@ export function AdminModulesPage() {
                                 }
                               >
                                 <div className={`rounded-md border border-white/15 bg-slate-900/70 ${sectionTemplate === 'template-3' && hasSectionMedia ? 'xl:order-2' : ''}`}>
-                                  <div className="flex flex-wrap items-center gap-2 border-b border-white/10 p-2">
+                                  <div data-topic-toolbar-section={section.id} className="flex flex-wrap items-center gap-2 border-b border-white/10 p-2">
                                     <div className={editorToolbarGroupClass}>
-                                      <button type="button" onMouseDown={preventToolbarButtonBlur} onClick={() => applyTopicContentCommand(section.id, 'bold')} className={editorToolbarButtonClass}>B</button>
-                                      <button type="button" onMouseDown={preventToolbarButtonBlur} onClick={() => applyTopicContentCommand(section.id, 'italic')} className={`${editorToolbarButtonClass} italic`}>I</button>
-                                      <button type="button" onMouseDown={preventToolbarButtonBlur} onClick={() => applyTopicContentCommand(section.id, 'underline')} className={`${editorToolbarButtonClass} underline`}>U</button>
+                                      <button
+                                        type="button"
+                                        onMouseDown={preventToolbarButtonBlur}
+                                        onClick={() => applyTopicContentCommand(section.id, 'bold')}
+                                        className={lessonToolbarButtonClass(topicToolbarState.bold)}
+                                      >
+                                        B
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onMouseDown={preventToolbarButtonBlur}
+                                        onClick={() => applyTopicContentCommand(section.id, 'italic')}
+                                        className={`${lessonToolbarButtonClass(topicToolbarState.italic)} italic`}
+                                      >
+                                        I
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onMouseDown={preventToolbarButtonBlur}
+                                        onClick={() => applyTopicContentCommand(section.id, 'underline')}
+                                        className={`${lessonToolbarButtonClass(topicToolbarState.underline)} underline`}
+                                      >
+                                        U
+                                      </button>
                                     </div>
                                     <div className={editorToolbarGroupClass}>
                                       <button
                                         type="button"
                                         onMouseDown={preventToolbarButtonBlur}
                                         onClick={() => applyTopicContentCommand(section.id, 'insertUnorderedList')}
-                                        className={editorToolbarIconButtonClass}
+                                        className={lessonToolbarIconButtonClass(topicToolbarState.unorderedList)}
                                         title="Bulleted list"
                                         aria-label="Bulleted list"
                                       >
@@ -1859,7 +2517,7 @@ export function AdminModulesPage() {
                                         type="button"
                                         onMouseDown={preventToolbarButtonBlur}
                                         onClick={() => applyTopicContentCommand(section.id, 'insertOrderedList')}
-                                        className={editorToolbarIconButtonClass}
+                                        className={lessonToolbarIconButtonClass(topicToolbarState.orderedList)}
                                         title="Numbered list"
                                         aria-label="Numbered list"
                                       >
@@ -1871,7 +2529,7 @@ export function AdminModulesPage() {
                                         type="button"
                                         onMouseDown={preventToolbarButtonBlur}
                                         onClick={() => applyTopicContentCommand(section.id, 'justifyLeft')}
-                                        className={editorToolbarIconButtonClass}
+                                        className={lessonToolbarIconButtonClass(topicToolbarState.align === 'left')}
                                         title="Align left"
                                         aria-label="Align left"
                                       >
@@ -1881,7 +2539,7 @@ export function AdminModulesPage() {
                                         type="button"
                                         onMouseDown={preventToolbarButtonBlur}
                                         onClick={() => applyTopicContentCommand(section.id, 'justifyCenter')}
-                                        className={editorToolbarIconButtonClass}
+                                        className={lessonToolbarIconButtonClass(topicToolbarState.align === 'center')}
                                         title="Align center"
                                         aria-label="Align center"
                                       >
@@ -1891,7 +2549,7 @@ export function AdminModulesPage() {
                                         type="button"
                                         onMouseDown={preventToolbarButtonBlur}
                                         onClick={() => applyTopicContentCommand(section.id, 'justifyRight')}
-                                        className={editorToolbarIconButtonClass}
+                                        className={lessonToolbarIconButtonClass(topicToolbarState.align === 'right')}
                                         title="Align right"
                                         aria-label="Align right"
                                       >
@@ -1901,7 +2559,7 @@ export function AdminModulesPage() {
                                         type="button"
                                         onMouseDown={preventToolbarButtonBlur}
                                         onClick={() => applyTopicContentCommand(section.id, 'justifyFull')}
-                                        className={editorToolbarIconButtonClass}
+                                        className={lessonToolbarIconButtonClass(topicToolbarState.align === 'justify')}
                                         title="Justify"
                                         aria-label="Justify"
                                       >
@@ -1910,34 +2568,42 @@ export function AdminModulesPage() {
                                     </div>
                                     <div className={editorToolbarGroupClass}>
                                       <select
-                                        defaultValue=""
+                                        value={topicToolbarState.fontSize}
                                         onMouseDown={() => rememberTopicEditorSelection(section.id)}
                                         onChange={(event) => {
                                           const value = event.target.value;
                                           if (!value) return;
                                           applyTopicContentCommand(section.id, 'fontSize', value);
-                                          event.target.value = '';
                                         }}
-                                        className={editorToolbarSelectClass}
+                                        className={lessonToolbarSelectStateClass(Boolean(topicToolbarState.fontSize))}
                                       >
                                         <option value="">Size</option>
-                                        <option value="1">Small</option>
-                                        <option value="3">Normal</option>
-                                        <option value="5">Large</option>
-                                        <option value="7">X-Large</option>
+                                        {!hasPresetTopicFontSize && topicToolbarState.fontSize ? (
+                                          <option value={topicToolbarState.fontSize}>Current ({topicToolbarState.fontSize}px)</option>
+                                        ) : null}
+                                        <option value="12">12px</option>
+                                        <option value="14">14px</option>
+                                        <option value="16">16px</option>
+                                        <option value="18">18px</option>
+                                        <option value="20">20px</option>
+                                        <option value="24">24px</option>
+                                        <option value="28">28px</option>
+                                        <option value="32">32px</option>
                                       </select>
                                       <select
-                                        defaultValue=""
+                                        value={topicToolbarState.foreColor}
                                         onMouseDown={() => rememberTopicEditorSelection(section.id)}
                                         onChange={(event) => {
                                           const value = event.target.value;
                                           if (!value) return;
                                           applyTopicContentCommand(section.id, 'foreColor', value);
-                                          event.target.value = '';
                                         }}
-                                        className={editorToolbarSelectClass}
+                                        className={lessonToolbarSelectStateClass(Boolean(topicToolbarState.foreColor))}
                                       >
                                         <option value="">Color</option>
+                                        {!hasPresetTopicColor && topicToolbarState.foreColor ? (
+                                          <option value={topicToolbarState.foreColor}>Current ({topicToolbarState.foreColor})</option>
+                                        ) : null}
                                         <option value="#f5c800">Yellow</option>
                                         <option value="#4a8fe8">Blue</option>
                                         <option value="#4caf7d">Green</option>
@@ -1960,6 +2626,13 @@ export function AdminModulesPage() {
                                     onMouseUp={() => rememberTopicEditorSelection(section.id)}
                                     onKeyUp={() => rememberTopicEditorSelection(section.id)}
                                     onBlur={(event) => {
+                                      const relatedTarget = event.relatedTarget;
+                                      if (
+                                        relatedTarget instanceof HTMLElement &&
+                                        relatedTarget.closest(`[data-topic-toolbar-section="${section.id}"]`)
+                                      ) {
+                                        return;
+                                      }
                                       rememberTopicEditorSelection(section.id);
                                       const topicBody = sanitizeRichHtml(event.currentTarget.innerHTML);
                                       updateContentLocal(section.id, {
@@ -2145,6 +2818,17 @@ export function AdminModulesPage() {
                               selectedQuestions.map((question, questionIndex) => {
                                 const answers = answersByQuestion.get(question.id) ?? [];
                                 const questionType = normalizeQuestionType(question.question_type);
+                                const maxSelectableChoices = Math.max(answers.length, 1);
+                                const normalizedMaxSelections =
+                                  questionType === 'multiple_choice'
+                                    ? Math.max(
+                                        1,
+                                        Math.min(
+                                          normalizeQuestionMaxSelections(questionType, question.max_selections, 2),
+                                          maxSelectableChoices
+                                        )
+                                      )
+                                    : 1;
                                 return (
                                   <div key={question.id} className="space-y-3 rounded-lg border border-white/10 bg-slate-900/40 p-4">
                                     <div className="flex items-start justify-between gap-3">
@@ -2161,7 +2845,7 @@ export function AdminModulesPage() {
                                         Delete Question
                                       </button>
                                     </div>
-                                    <div className="grid items-end gap-2 md:grid-cols-[minmax(0,1fr)_110px_240px]">
+                                    <div className="grid items-end gap-2 md:grid-cols-[minmax(0,1fr)_120px_220px_110px]">
                                       <label className="space-y-1">
                                         <span className="text-[11px] font-semibold uppercase tracking-[0.13em] text-slate-400">Question Prompt</span>
                                         <input
@@ -2171,13 +2855,22 @@ export function AdminModulesPage() {
                                         />
                                       </label>
                                       <label className="space-y-1">
-                                        <span className="text-[11px] font-semibold uppercase tracking-[0.13em] text-slate-400">Points</span>
+                                        <span className="text-[11px] font-semibold uppercase tracking-[0.13em] text-slate-400">Max Checks</span>
                                         <input
                                           type="number"
                                           min={1}
-                                          value={question.points}
-                                          onChange={(event) => updateQuestionLocal(question.id, { points: Number(event.target.value) || 1 })}
-                                          className="w-full rounded-md border border-white/15 bg-slate-950/70 px-3 py-2 text-sm text-slate-100"
+                                          max={maxSelectableChoices}
+                                          disabled={questionType === 'single_choice'}
+                                          value={normalizedMaxSelections}
+                                          onChange={(event) => {
+                                            const rawValue = Number(event.target.value);
+                                            const parsedValue = Number.isFinite(rawValue) ? Math.floor(rawValue) : 1;
+                                            const boundedValue = Math.max(1, Math.min(parsedValue, maxSelectableChoices));
+                                            updateQuestionLocal(question.id, {
+                                              max_selections: questionType === 'single_choice' ? 1 : boundedValue,
+                                            });
+                                          }}
+                                          className="w-full rounded-md border border-white/15 bg-slate-950/70 px-3 py-2 text-sm text-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
                                         />
                                       </label>
                                       <label className="space-y-1">
@@ -2192,6 +2885,16 @@ export function AdminModulesPage() {
                                           <option value="single_choice">Radio Button (Single Answer)</option>
                                           <option value="multiple_choice">Check Boxes (Multiple Answers)</option>
                                         </select>
+                                      </label>
+                                      <label className="space-y-1">
+                                        <span className="text-[11px] font-semibold uppercase tracking-[0.13em] text-slate-400">Points</span>
+                                        <input
+                                          type="number"
+                                          min={1}
+                                          value={question.points}
+                                          onChange={(event) => updateQuestionLocal(question.id, { points: Number(event.target.value) || 1 })}
+                                          className="w-full rounded-md border border-white/15 bg-slate-950/70 px-3 py-2 text-sm text-slate-100"
+                                        />
                                       </label>
                                     </div>
                                     <div className="space-y-2 border-t border-white/10 pt-3">
@@ -2233,7 +2936,7 @@ export function AdminModulesPage() {
                                         <p className="text-xs text-slate-400">
                                           {questionType === 'single_choice'
                                             ? 'Radio button mode: select exactly one correct answer.'
-                                            : 'Check boxes mode: select all correct answers.'}
+                                            : `Check boxes mode: users can select up to ${normalizedMaxSelections} answers.`}
                                         </p>
                                         <button
                                           type="button"
@@ -2258,6 +2961,48 @@ export function AdminModulesPage() {
           </div>
 
         </div>
+        </div>
+      ) : null}
+
+      {confirmationDialog ? (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm">
+          <div className="w-full max-w-md rounded-2xl border border-white/15 bg-slate-900 p-5 shadow-2xl">
+            <div className="flex items-start gap-3">
+              <span
+                className={`mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${
+                  confirmationDialog.tone === 'danger'
+                    ? 'bg-rose-500/20 text-rose-200'
+                    : 'bg-brand-500/20 text-brand-100'
+                }`}
+              >
+                <AlertTriangle size={16} />
+              </span>
+              <div className="space-y-1">
+                <h3 className="text-base font-semibold text-white">{confirmationDialog.title}</h3>
+                <p className="text-sm text-slate-300">{confirmationDialog.message}</p>
+              </div>
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={closeConfirmation}
+                className="rounded-full border border-white/20 px-4 py-2 text-xs font-semibold text-slate-200 hover:bg-white/10"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmAction}
+                className={`rounded-full px-4 py-2 text-xs font-semibold ${
+                  confirmationDialog.tone === 'danger'
+                    ? 'bg-rose-500 text-white hover:bg-rose-400'
+                    : 'bg-brand-500 text-slate-950 hover:bg-brand-400'
+                }`}
+              >
+                {confirmationDialog.confirmLabel}
+              </button>
+            </div>
+          </div>
         </div>
       ) : null}
 
@@ -2625,295 +3370,46 @@ export function AdminModulesPage() {
 
       {showPreviewModal ? (
         <div className="fixed inset-0 z-50 flex items-start justify-center bg-slate-950/90 p-4 backdrop-blur-sm">
-          <div className="h-[90vh] w-full max-w-[95vw] xl:max-w-8xl overflow-hidden rounded-3xl border border-white/10 bg-slate-950">
+          <div className="h-[96vh] w-full max-w-[99vw] overflow-hidden rounded-3xl border border-white/10 bg-slate-950">
             <div className="flex items-center justify-between border-b border-white/10 bg-slate-900 px-5 py-3">
               <h3 className="text-lg font-bold text-white">Student Preview</h3>
-              <button
-                onClick={() => setShowPreviewModal(false)}
-                className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-rose-500/30 bg-rose-500/10 text-rose-300 transition hover:bg-rose-500/20"
-                aria-label="Close preview"
-              >
-                <X size={18} />
-              </button>
-            </div>
-            <div className="grid h-[calc(90vh-70px)] gap-5 overflow-hidden p-5 xl:grid-cols-[536px_minmax(0,1fr)]">
-              <aside className="no-scrollbar rounded-3xl border border-white/10 bg-slate-900/70 p-5 shadow-sm xl:sticky xl:top-20 xl:h-[calc(90vh-5rem)] xl:overflow-y-auto">
-                <div className="rounded-3xl border border-white/10 bg-slate-950/70 p-4">
-                  <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">
-                    Module {builder?.module.id ?? '--'}
-                  </p>
-                  <p className="mt-2 text-base font-semibold text-white">{builder?.module.title ?? 'Untitled Module'}</p>
-                  <div className="mt-3 flex items-center justify-between text-[11px] text-slate-400">
-                    <span>Progress</span>
-                    <span className="font-semibold text-brand-300">{previewCompletionPercent}%</span>
-                  </div>
-                  <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-800/70">
-                    <div
-                      className="h-full rounded-full bg-brand-500"
-                      style={{ width: `${Math.max(0, Math.min(100, previewCompletionPercent))}%` }}
-                    />
-                  </div>
-                </div>
-
-                <div className="mt-5 rounded-3xl border border-white/10 bg-slate-950/70 p-4">
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">Learning Sequence</p>
-                  <div className="mt-3 space-y-3">
-                    {sequence.map((item) => {
-                      const active = sameSelection(item.selection, previewSelection);
-                      return (
-                        <button
-                          key={`preview-${selectionKey(item.selection)}`}
-                          type="button"
-                          onClick={() => setPreviewSelection(item.selection)}
-                          className={`w-full rounded-2xl border px-4 py-3 text-left transition ${
-                            active
-                              ? 'border-sky-400/50 bg-sky-500/10 text-white'
-                              : 'border-slate-700/80 bg-slate-950/80 text-slate-300 hover:border-white/20 hover:bg-white/10'
-                          }`}
-                        >
-                          <div className="flex items-center justify-between gap-3">
-                            <span className="text-sm font-semibold text-white">{item.label}</span>
-                            <span className="text-[10px] uppercase tracking-[0.16em] text-slate-400">
-                              {getSequenceLabel(item)}
-                            </span>
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              </aside>
-
-              <div className="flex min-h-0 flex-col overflow-hidden rounded-3xl border border-white/10 bg-slate-900/70 shadow-sm">
-                <div className="border-b border-white/10 bg-slate-950 px-5 py-4">
-                  <p className="text-[10px] font-semibold uppercase tracking-[0.15em] text-brand-300">{previewNodeLabel}</p>
-                  <h2 className="mt-2 text-2xl font-bold text-white">{previewPageTitle}</h2>
-                  <p className="mt-2 max-w-2xl text-sm text-slate-300">{previewPageSummary}</p>
-                </div>
-
-                <div className="min-h-0 flex-1 overflow-y-auto p-5">
-                  {previewSelection.view === 'lesson' && previewCurrentLesson ? (
-                    <div className="space-y-6">
-                      {previewCurrentLesson.overview_text ? (
-                        <div className="rounded-3xl border border-white/10 bg-slate-950/60 p-5 text-sm text-slate-200">
-                          <div dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(previewCurrentLesson.overview_text) }} />
-                        </div>
-                      ) : null}
-                      {previewCurrentLessonMediaUrls.length > 0 ? (
-                        <div className="grid gap-3 md:grid-cols-2">
-                          {previewCurrentLessonMediaUrls.map((mediaUrl, mediaIndex) =>
-                            isVideoMediaUrl(mediaUrl) ? (
-                              <video
-                                key={`${mediaUrl}-${mediaIndex}`}
-                                src={mediaUrl}
-                                controls
-                                className="h-[220px] w-full rounded-3xl border border-white/10 bg-black/30 object-contain"
-                              />
-                            ) : (
-                              <img
-                                key={`${mediaUrl}-${mediaIndex}`}
-                                src={mediaUrl}
-                                alt={`${previewCurrentLesson.title} media ${mediaIndex + 1}`}
-                                className="h-[220px] w-full rounded-3xl border border-white/10 bg-black/30 object-contain"
-                              />
-                            )
-                          )}
-                        </div>
-                      ) : null}
-                      <div className="space-y-4">
-                        {previewLessonTopics.length === 0 ? (
-                          <p className="rounded-3xl border border-white/10 bg-slate-950/60 p-5 text-sm text-slate-400">
-                            No lesson topics configured yet.
-                          </p>
-                        ) : (
-                          previewLessonTopics.map((topic, topicIndex) => {
-                            const topicSections = contentByTopic.get(topic.id) ?? [];
-                            return (
-                              <div key={topic.id} className="rounded-3xl border border-white/10 bg-slate-950/60 p-5">
-                                <div className="flex items-center justify-between gap-4">
-                                  <div>
-                                    <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Topic {topicIndex + 1}</p>
-                                    <h3 className="mt-2 text-lg font-semibold text-white">{topic.title}</h3>
-                                  </div>
-                                  <StatusPill
-                                    text={topicSections.length > 0 ? 'With Content' : 'Empty'}
-                                    className={
-                                      topicSections.length > 0
-                                        ? 'border-emerald-300/30 bg-emerald-500/10 text-emerald-200'
-                                        : 'border-slate-400/30 bg-slate-700/30 text-slate-300'
-                                    }
-                                  />
-                                </div>
-                                {topic.summary ? <p className="mt-3 text-sm text-slate-300">{topic.summary}</p> : null}
-                                {topicSections.length === 0 ? null : (
-                                  <div className="mt-4 space-y-4">
-                                    {topicSections.map((section, sectionIndex) => {
-                                      const sectionTemplate = getTopicTemplateFromBlock(section);
-                                      const sectionHtml = sanitizeRichHtml(section.body_text ?? '');
-                                      const sectionMediaUrl = getRenderableMediaUrl(section);
-
-                                      return (
-                                        <div key={section.id} className="space-y-3 rounded-3xl border border-white/10 bg-slate-950/60 p-4">
-                                          <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400">
-                                            Section {sectionIndex + 1}
-                                          </p>
-                                          <div
-                                            className={`rounded-3xl border border-white/10 bg-slate-950/80 p-4 text-sm text-slate-200 ${
-                                              sectionTemplate === 'template-2' ? 'space-y-3' : ''
-                                            }`}
-                                          >
-                                            {sectionHtml ? (
-                                              <div dangerouslySetInnerHTML={{ __html: sectionHtml }} />
-                                            ) : (
-                                              <p className="text-sm text-slate-400">No text content.</p>
-                                            )}
-                                          </div>
-                                          {sectionMediaUrl ? (
-                                            <div className="rounded-3xl border border-white/10 bg-slate-950/80 p-4">
-                                              {section.content_type === 'video' || isVideoMediaUrl(sectionMediaUrl) ? (
-                                                <video
-                                                  src={sectionMediaUrl}
-                                                  controls
-                                                  className="w-full rounded-3xl object-contain"
-                                                />
-                                              ) : (
-                                                <img
-                                                  src={sectionMediaUrl}
-                                                  alt={`${topic.title} section ${sectionIndex + 1}`}
-                                                  className="w-full rounded-3xl object-contain"
-                                                />
-                                              )}
-                                            </div>
-                                          ) : null}
-                                        </div>
-                                      );
-                                    })}
-                                  </div>
-                                )}
-                              </div>
-                            );
-                          })
-                        )}
-                      </div>
-                    </div>
-                  ) : null}
-
-                  {previewSelection.view === 'topic' && previewCurrentTopic ? (
-                    <div className="space-y-6">
-                      {previewCurrentTopic.summary ? (
-                        <div className="rounded-3xl border border-white/10 bg-slate-950/60 p-5 text-sm text-slate-200">
-                          <p>{previewCurrentTopic.summary}</p>
-                        </div>
-                      ) : null}
-                      {previewTopicSections.length === 0 ? (
-                        <p className="rounded-3xl border border-white/10 bg-slate-950/60 p-5 text-sm text-slate-400">
-                          No topic content yet.
-                        </p>
-                      ) : (
-                        previewTopicSections.map((section, sectionIndex) => {
-                          const sectionTemplate = getTopicTemplateFromBlock(section);
-                          const sectionHtml = sanitizeRichHtml(section.body_text ?? '');
-                          const sectionMediaUrl = getRenderableMediaUrl(section);
-
-                          return (
-                            <div key={section.id} className="space-y-3 rounded-3xl border border-white/10 bg-slate-950/60 p-5">
-                              <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400">
-                                Section {sectionIndex + 1}
-                              </p>
-                              <div className="rounded-3xl border border-white/10 bg-slate-950/80 p-4 text-sm text-slate-200">
-                                {sectionHtml ? (
-                                  <div dangerouslySetInnerHTML={{ __html: sectionHtml }} />
-                                ) : (
-                                  <p className="text-sm text-slate-400">No text content.</p>
-                                )}
-                              </div>
-                              {sectionMediaUrl ? (
-                                <div className="rounded-3xl border border-white/10 bg-slate-950/80 p-4">
-                                  {section.content_type === 'video' || isVideoMediaUrl(sectionMediaUrl) ? (
-                                    <video
-                                      src={sectionMediaUrl}
-                                      controls
-                                      className="w-full rounded-3xl object-contain"
-                                    />
-                                  ) : (
-                                    <img
-                                      src={sectionMediaUrl}
-                                      alt={`${previewCurrentTopic.title} section ${sectionIndex + 1}`}
-                                      className="w-full rounded-3xl object-contain"
-                                    />
-                                  )}
-                                </div>
-                              ) : null}
-                            </div>
-                          );
-                        })
-                      )}
-                    </div>
-                  ) : null}
-
-                  {(previewSelection.view === 'preTest' || previewSelection.view === 'postTest' || previewSelection.view === 'finalExam') && previewCurrentQuiz ? (
-                    <div className="space-y-6">
-                      <div className="rounded-3xl border border-white/10 bg-slate-950/60 p-5">
-                        <div className="grid gap-3 md:grid-cols-3 text-sm text-slate-300">
-                          <div>Passing: {previewCurrentQuiz.passing_score}%</div>
-                          <div>Time: {previewCurrentQuiz.time_limit_minutes} min</div>
-                          <div>Attempts: {previewCurrentQuiz.attempt_limit}</div>
-                        </div>
-                      </div>
-                      {(questionsByQuiz.get(previewCurrentQuiz.id) ?? []).map((question, questionIndex) => (
-                        <div key={question.id} className="rounded-3xl border border-white/10 bg-slate-950/60 p-5">
-                          <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400">
-                            Question {questionIndex + 1}
-                          </p>
-                          <p className="mt-2 text-base font-semibold text-white">{question.prompt}</p>
-                          <div className="mt-4 grid gap-2 text-sm text-slate-300">
-                            {(answersByQuestion.get(question.id) ?? []).map((answer) => (
-                              <p
-                                key={answer.id}
-                                className="rounded-2xl border border-white/10 bg-slate-950/80 px-3 py-2"
-                              >
-                                {answer.answer_text}
-                              </p>
-                            ))}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
-
-                  {previewSelection.view === 'finalExam' && !previewCurrentQuiz ? (
-                    <p className="rounded-3xl border border-white/10 bg-slate-950/60 p-5 text-sm text-slate-400">
-                      Final exam has not been created yet.
-                    </p>
-                  ) : null}
-                </div>
-
-                <div className="flex items-center justify-between border-t border-white/10 bg-slate-950 px-5 py-3">
-                  <button
-                    disabled={previewIndex <= 0}
-                    onClick={() => {
-                      const previous = sequence[previewIndex - 1];
-                      if (previous) setPreviewSelection(previous.selection);
-                    }}
-                    className="inline-flex items-center gap-1 rounded-full border border-white/20 px-3 py-1.5 text-xs font-semibold text-slate-200 disabled:opacity-40"
-                  >
-                    <ChevronLeft size={14} /> Previous
-                  </button>
-                  <p className="text-xs font-semibold text-slate-400">
-                    {previewIndex >= 0 ? `${previewIndex + 1} / ${sequence.length}` : `0 / ${sequence.length}`}
-                  </p>
-                  <button
-                    disabled={previewIndex < 0 || previewIndex >= sequence.length - 1}
-                    onClick={() => {
-                      const next = sequence[previewIndex + 1];
-                      if (next) setPreviewSelection(next.selection);
-                    }}
-                    className="inline-flex items-center gap-1 rounded-full bg-brand-500 px-3 py-1.5 text-xs font-semibold text-slate-950 disabled:opacity-40"
-                  >
-                    Next <ChevronRight size={14} />
-                  </button>
-                </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPreviewBypassLocks((previous) => !previous)}
+                  className={`inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-xs font-semibold transition ${
+                    previewBypassLocks
+                      ? 'border-amber-300/50 bg-amber-500/15 text-amber-200 hover:bg-amber-500/20'
+                      : 'border-white/20 bg-slate-900/80 text-slate-200 hover:bg-white/10'
+                  }`}
+                  title="Toggle bypass progress locks in preview"
+                >
+                  {previewBypassLocks ? <LockOpen size={14} /> : <Lock size={14} />}
+                  {previewBypassLocks ? 'Bypass On' : 'Bypass Off'}
+                </button>
+                <button
+                  onClick={() => {
+                    setShowPreviewModal(false);
+                    setPreviewSnapshot(null);
+                    setPreviewBypassLocks(false);
+                  }}
+                  className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-rose-500/30 bg-rose-500/10 text-rose-300 transition hover:bg-rose-500/20"
+                  aria-label="Close preview"
+                >
+                  <X size={18} />
+                </button>
               </div>
+            </div>
+            <div className="h-[calc(96vh-62px)] overflow-hidden p-[10px]">
+              {previewSnapshot ? (
+                <div className="h-full w-full overflow-hidden rounded-none border-0 bg-slate-950">
+                  <ModuleViewerPage previewData={previewSnapshot} previewBypassLocks={previewBypassLocks} />
+                </div>
+              ) : (
+                <p className="rounded-xl border border-white/10 bg-slate-900/60 p-4 text-sm text-slate-300">
+                  Preview data unavailable.
+                </p>
+              )}
             </div>
           </div>
         </div>

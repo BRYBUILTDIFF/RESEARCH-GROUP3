@@ -3,6 +3,7 @@ import {
   Award,
   Check,
   CheckCircle2,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   CircleDotDashed,
@@ -30,10 +31,13 @@ import {
   submitQuiz,
 } from '../../lib/api';
 import type {
+  AnswerOption,
   Enrollment,
   LessonContentBlock,
   LessonSummary,
+  ModuleBuilderPayload,
   QuizQuestion,
+  QuizQuestionRow,
   QuizResult,
   QuizSummary,
   TopicSummary,
@@ -62,11 +66,65 @@ function parseLessonOverviewMediaUrls(value: string | null | undefined): string[
   return [normalized];
 }
 
+const ALLOWED_INLINE_STYLE_PROPERTIES = new Set([
+  'color',
+  'background-color',
+  'font-size',
+  'font-weight',
+  'font-style',
+  'text-decoration',
+  'text-align',
+]);
+
+function sanitizeInlineStyle(styleValue: string) {
+  return styleValue
+    .split(';')
+    .map((declaration) => declaration.trim())
+    .filter((declaration) => declaration.length > 0)
+    .map((declaration) => {
+      const separatorIndex = declaration.indexOf(':');
+      if (separatorIndex === -1) return null;
+
+      const property = declaration.slice(0, separatorIndex).trim().toLowerCase();
+      let value = declaration.slice(separatorIndex + 1).trim();
+      if (!ALLOWED_INLINE_STYLE_PROPERTIES.has(property)) return null;
+      if (/expression|javascript:|url\(/i.test(value)) return null;
+
+      if (property === 'font-size') {
+        const numericValue = Number.parseFloat(value);
+        if (!Number.isFinite(numericValue)) return null;
+        const unitMatch = value.match(/[a-z%]+$/i);
+        const unit = (unitMatch ? unitMatch[0] : 'px').toLowerCase();
+        if (!['px', 'em', 'rem', '%'].includes(unit)) return null;
+        const clampedValue = Math.max(8, Math.min(96, numericValue));
+        const normalizedNumber = Number.isInteger(clampedValue)
+          ? `${clampedValue}`
+          : clampedValue.toFixed(2).replace(/\.?0+$/, '');
+        value = `${normalizedNumber}${unit}`;
+      }
+
+      return `${property}: ${value}`;
+    })
+    .filter((declaration): declaration is string => Boolean(declaration))
+    .join('; ');
+}
+
 function sanitizeRichHtml(input: string) {
   return input
     .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[\s\S]*?>[\s\S]*?<\/style>/gi, '')
     .replace(/\son\w+="[^"]*"/gi, '')
-    .replace(/\son\w+='[^']*'/gi, '');
+    .replace(/\son\w+='[^']*'/gi, '')
+    .replace(/\sclass="[^"]*"/gi, '')
+    .replace(/\sclass='[^']*'/gi, '')
+    .replace(/\sstyle="([^"]*)"/gi, (_match, styleValue: string) => {
+      const safeStyle = sanitizeInlineStyle(styleValue);
+      return safeStyle ? ` style="${safeStyle}"` : '';
+    })
+    .replace(/\sstyle='([^']*)'/gi, (_match, styleValue: string) => {
+      const safeStyle = sanitizeInlineStyle(styleValue);
+      return safeStyle ? ` style="${safeStyle}"` : '';
+    });
 }
 
 function isVideoMediaUrl(url: string | null | undefined) {
@@ -177,9 +235,60 @@ function StatusPill({ text, className }: { text: string; className: string }) {
   );
 }
 
-export function ModuleViewerPage() {
+type ModuleViewerPageProps = {
+  previewData?: ModuleBuilderPayload | null;
+  previewBypassLocks?: boolean;
+};
+
+function buildPreviewQuestionsByQuizId(
+  questions: QuizQuestionRow[],
+  answers: AnswerOption[]
+): Record<number, QuizQuestion[]> {
+  const answersByQuestionId = new Map<number, AnswerOption[]>();
+  answers.forEach((answer) => {
+    const existing = answersByQuestionId.get(answer.question_id) ?? [];
+    existing.push(answer);
+    answersByQuestionId.set(answer.question_id, existing);
+  });
+
+  const questionsByQuizId: Record<number, QuizQuestion[]> = {};
+  questions
+    .slice()
+    .sort((a, b) => (a.quiz_id - b.quiz_id) || (a.sort_order - b.sort_order) || (a.id - b.id))
+    .forEach((question) => {
+      const questionAnswers = (answersByQuestionId.get(question.id) ?? [])
+        .slice()
+        .sort((a, b) => (a.sort_order - b.sort_order) || (a.id - b.id));
+      const correctCount = questionAnswers.filter((answer) => Boolean(answer.is_correct)).length;
+      const effectiveType = question.question_type === 'multiple_choice' || correctCount > 1 ? 'multiple_choice' : 'single_choice';
+      const effectiveMaxSelections =
+        effectiveType === 'multiple_choice'
+          ? Math.max(1, Number(question.max_selections) || 1, correctCount)
+          : 1;
+
+      if (!questionsByQuizId[question.quiz_id]) {
+        questionsByQuizId[question.quiz_id] = [];
+      }
+
+      questionsByQuizId[question.quiz_id].push({
+        id: question.id,
+        prompt: question.prompt,
+        question_type: effectiveType,
+        max_selections: effectiveMaxSelections,
+        points: question.points,
+        sort_order: question.sort_order,
+        answers: questionAnswers,
+      });
+    });
+
+  return questionsByQuizId;
+}
+
+export function ModuleViewerPage({ previewData = null, previewBypassLocks = false }: ModuleViewerPageProps = {}) {
   const { moduleId } = useParams<{ moduleId: string }>();
-  const moduleIdNumber = Number(moduleId);
+  const isPreviewMode = Boolean(previewData);
+  const isPreviewBypassMode = isPreviewMode && previewBypassLocks;
+  const moduleIdNumber = isPreviewMode ? Number(previewData?.module.id ?? 0) : Number(moduleId);
 
   const [moduleTitle, setModuleTitle] = useState('');
   const [enrollment, setEnrollment] = useState<Enrollment | null>(null);
@@ -196,12 +305,15 @@ export function ModuleViewerPage() {
   const [readProgressByLessonId, setReadProgressByLessonId] = useState<Record<number, number>>({});
   const [activeLessonStepIndexByLessonId, setActiveLessonStepIndexByLessonId] = useState<Record<number, number>>({});
   const [viewedStepKeysByLessonId, setViewedStepKeysByLessonId] = useState<Record<number, Record<string, true>>>({});
+  const [lessonResetRequiredByLessonId, setLessonResetRequiredByLessonId] = useState<Record<number, true>>({});
+  const [postTestRecoveredCycleByLessonId, setPostTestRecoveredCycleByLessonId] = useState<Record<number, number>>({});
+  const [expandedLessonIds, setExpandedLessonIds] = useState<Record<number, true>>({});
   const [quizPreviewByQuizId, setQuizPreviewByQuizId] = useState<Record<number, QuizQuestion[]>>({});
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [isMutating, setIsMutating] = useState(false);
   const [quizQuestions, setQuizQuestions] = useState<QuizQuestion[]>([]);
-  const [quizAnswers, setQuizAnswers] = useState<Record<number, number>>({});
+  const [quizAnswers, setQuizAnswers] = useState<Record<number, number[]>>({});
   const [quizSubmittedByQuestionId, setQuizSubmittedByQuestionId] = useState<Record<number, true>>({});
   const [quizCurrentIndex, setQuizCurrentIndex] = useState(0);
   const [quizInProgressId, setQuizInProgressId] = useState<number | null>(null);
@@ -227,6 +339,129 @@ export function ModuleViewerPage() {
     setError('');
 
     try {
+      if (isPreviewMode && previewData) {
+        setModuleTitle(previewData.module.title);
+        setEnrollment({
+          id: -1 * Math.max(1, Number(previewData.module.id) || 1),
+          user_id: 0,
+          module_id: previewData.module.id,
+          status: 'in_progress',
+          enrolled_at: new Date().toISOString(),
+          completed_at: null,
+          module_title: previewData.module.title,
+          last_lesson_id: null,
+        });
+
+        const orderedLessons = [...(previewData.lessons ?? [])]
+          .sort((a, b) => a.sequence_no - b.sequence_no)
+          .map((lesson) => ({
+            ...lesson,
+            completed: Boolean(lesson.completed),
+          }));
+        setLessons(orderedLessons);
+        setQuizzes([...(previewData.quizzes ?? [])]);
+        setResults([]);
+        setCompletionPercent(0);
+
+        const nextTopicsByLessonId: Record<number, TopicSummary[]> = {};
+        (previewData.topics ?? []).forEach((topic) => {
+          if (!nextTopicsByLessonId[topic.lesson_id]) nextTopicsByLessonId[topic.lesson_id] = [];
+          nextTopicsByLessonId[topic.lesson_id].push(topic);
+        });
+        Object.keys(nextTopicsByLessonId).forEach((lessonId) => {
+          nextTopicsByLessonId[Number(lessonId)].sort((a, b) => (a.sort_order - b.sort_order) || (a.id - b.id));
+        });
+
+        const nextLessonContentByLessonId: Record<number, LessonContentBlock[]> = {};
+        const nextContentByTopicId: Record<number, LessonContentBlock[]> = {};
+        (previewData.content ?? []).forEach((block) => {
+          if (block.topic_id === null) {
+            if (!nextLessonContentByLessonId[block.lesson_id]) nextLessonContentByLessonId[block.lesson_id] = [];
+            nextLessonContentByLessonId[block.lesson_id].push(block);
+            return;
+          }
+          if (!nextContentByTopicId[block.topic_id]) nextContentByTopicId[block.topic_id] = [];
+          nextContentByTopicId[block.topic_id].push(block);
+        });
+        Object.keys(nextLessonContentByLessonId).forEach((lessonId) => {
+          nextLessonContentByLessonId[Number(lessonId)].sort((a, b) => (a.sort_order - b.sort_order) || (a.id - b.id));
+        });
+        Object.keys(nextContentByTopicId).forEach((topicId) => {
+          nextContentByTopicId[Number(topicId)].sort((a, b) => (a.sort_order - b.sort_order) || (a.id - b.id));
+        });
+        setTopicsByLessonId(nextTopicsByLessonId);
+        setLessonContentByLessonId(nextLessonContentByLessonId);
+        setContentByTopicId(nextContentByTopicId);
+        setQuizPreviewByQuizId(buildPreviewQuestionsByQuizId(previewData.questions ?? [], previewData.answers ?? []));
+
+        const quizzesByModule = [...(previewData.quizzes ?? [])];
+        const defaultLessonId =
+          orderedLessons.find((lesson) => !lesson.completed || lessonResetRequiredByLessonId[lesson.id])?.id ??
+          orderedLessons[0]?.id ??
+          null;
+        const hasSelectedLesson = selectedLessonId !== null && orderedLessons.some((lesson) => lesson.id === selectedLessonId);
+        const hasSelectedAssessment =
+          selectedAssessmentId !== null && quizzesByModule.some((quiz) => quiz.id === selectedAssessmentId);
+        const lessonOrderLookup = new Map<number, number>();
+        orderedLessons.forEach((lesson, index) => {
+          lessonOrderLookup.set(lesson.id, index);
+        });
+        const defaultPreTest =
+          [...quizzesByModule]
+            .filter(isPreTest)
+            .sort((a, b) => {
+              const orderA = a.lesson_id !== null ? lessonOrderLookup.get(a.lesson_id) ?? Number.MAX_SAFE_INTEGER : -1;
+              const orderB = b.lesson_id !== null ? lessonOrderLookup.get(b.lesson_id) ?? Number.MAX_SAFE_INTEGER : -1;
+              if (orderA !== orderB) return orderA - orderB;
+              return a.id - b.id;
+            })[0] ?? null;
+        let nextLessonId: number | null = hasSelectedLesson ? selectedLessonId : null;
+        let nextAssessmentId: number | null = null;
+
+        if (hasSelectedAssessment) {
+          nextAssessmentId = selectedAssessmentId;
+          const selectedQuiz = quizzesByModule.find((quiz) => quiz.id === selectedAssessmentId) ?? null;
+          const selectedQuizLessonId =
+            selectedQuiz?.lesson_id !== null && selectedQuiz?.lesson_id !== undefined ? Number(selectedQuiz.lesson_id) : null;
+          if (selectedQuizLessonId !== null && orderedLessons.some((lesson) => lesson.id === selectedQuizLessonId)) {
+            nextLessonId = selectedQuizLessonId;
+          }
+        } else if (nextLessonId === null) {
+          if (defaultPreTest) {
+            nextAssessmentId = defaultPreTest.id;
+            const defaultPreTestLessonId =
+              defaultPreTest.lesson_id !== null && defaultPreTest.lesson_id !== undefined
+                ? Number(defaultPreTest.lesson_id)
+                : null;
+            nextLessonId =
+              defaultPreTestLessonId !== null && orderedLessons.some((lesson) => lesson.id === defaultPreTestLessonId)
+                ? defaultPreTestLessonId
+                : defaultLessonId;
+          } else {
+            nextLessonId = defaultLessonId;
+          }
+        }
+
+        const focusedLessonId = (() => {
+          if (nextAssessmentId !== null) {
+            const focusedQuiz = quizzesByModule.find((quiz) => quiz.id === nextAssessmentId) ?? null;
+            if (focusedQuiz?.lesson_id !== null && focusedQuiz?.lesson_id !== undefined) {
+              return Number(focusedQuiz.lesson_id);
+            }
+          }
+          return nextLessonId;
+        })();
+
+        setSelectedLessonId(nextLessonId);
+        setSelectedAssessmentId(nextAssessmentId);
+        setExpandedLessonIds(() => {
+          if (focusedLessonId === null) return {};
+          if (!orderedLessons.some((lesson) => lesson.id === focusedLessonId)) return {};
+          return { [focusedLessonId]: true };
+        });
+        return;
+      }
+
       const module = await getModuleById(moduleIdNumber);
       setModuleTitle(module.title);
 
@@ -287,9 +522,13 @@ export function ModuleViewerPage() {
       setLessonContentByLessonId(nextLessonContentByLessonId);
       setContentByTopicId(nextContentByTopicId);
 
-      const defaultLessonId = orderedLessons.find((lesson) => !lesson.completed)?.id ?? orderedLessons[0]?.id ?? null;
-      const nextLessonId =
-        selectedLessonId && orderedLessons.some((lesson) => lesson.id === selectedLessonId) ? selectedLessonId : defaultLessonId;
+      const defaultLessonId =
+        orderedLessons.find((lesson) => !lesson.completed || lessonResetRequiredByLessonId[lesson.id])?.id ??
+        orderedLessons[0]?.id ??
+        null;
+      const hasSelectedLesson = selectedLessonId !== null && orderedLessons.some((lesson) => lesson.id === selectedLessonId);
+      const hasSelectedAssessment =
+        selectedAssessmentId !== null && quizzesByModule.some((quiz) => quiz.id === selectedAssessmentId);
       const lessonOrderLookup = new Map<number, number>();
       orderedLessons.forEach((lesson, index) => {
         lessonOrderLookup.set(lesson.id, index);
@@ -303,13 +542,50 @@ export function ModuleViewerPage() {
             if (orderA !== orderB) return orderA - orderB;
             return a.id - b.id;
           })[0] ?? null;
-      const nextAssessmentId =
-        selectedAssessmentId && quizzesByModule.some((quiz) => quiz.id === selectedAssessmentId)
-          ? selectedAssessmentId
-          : defaultPreTest?.id ?? null;
+      let nextLessonId: number | null = hasSelectedLesson ? selectedLessonId : null;
+      let nextAssessmentId: number | null = null;
+
+      if (hasSelectedAssessment) {
+        nextAssessmentId = selectedAssessmentId;
+        const selectedQuiz = quizzesByModule.find((quiz) => quiz.id === selectedAssessmentId) ?? null;
+        const selectedQuizLessonId =
+          selectedQuiz?.lesson_id !== null && selectedQuiz?.lesson_id !== undefined ? Number(selectedQuiz.lesson_id) : null;
+        if (selectedQuizLessonId !== null && orderedLessons.some((lesson) => lesson.id === selectedQuizLessonId)) {
+          nextLessonId = selectedQuizLessonId;
+        }
+      } else if (nextLessonId === null) {
+        if (defaultPreTest) {
+          nextAssessmentId = defaultPreTest.id;
+          const defaultPreTestLessonId =
+            defaultPreTest.lesson_id !== null && defaultPreTest.lesson_id !== undefined
+              ? Number(defaultPreTest.lesson_id)
+              : null;
+          nextLessonId =
+            defaultPreTestLessonId !== null && orderedLessons.some((lesson) => lesson.id === defaultPreTestLessonId)
+              ? defaultPreTestLessonId
+              : defaultLessonId;
+        } else {
+          nextLessonId = defaultLessonId;
+        }
+      }
+
+      const focusedLessonId = (() => {
+        if (nextAssessmentId !== null) {
+          const focusedQuiz = quizzesByModule.find((quiz) => quiz.id === nextAssessmentId) ?? null;
+          if (focusedQuiz?.lesson_id !== null && focusedQuiz?.lesson_id !== undefined) {
+            return Number(focusedQuiz.lesson_id);
+          }
+        }
+        return nextLessonId;
+      })();
 
       setSelectedLessonId(nextLessonId);
       setSelectedAssessmentId(nextAssessmentId);
+      setExpandedLessonIds(() => {
+        if (focusedLessonId === null) return {};
+        if (!orderedLessons.some((lesson) => lesson.id === focusedLessonId)) return {};
+        return { [focusedLessonId]: true };
+      });
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : 'Failed to load module viewer.');
     } finally {
@@ -319,7 +595,7 @@ export function ModuleViewerPage() {
 
   useEffect(() => {
     void reload();
-  }, [moduleIdNumber]);
+  }, [moduleIdNumber, isPreviewMode, previewData]);
 
   useEffect(() => {
     if (!terminalLogBoxRef.current) return;
@@ -332,21 +608,6 @@ export function ModuleViewerPage() {
     return map;
   }, [lessons]);
 
-  const unlockedLessonIds = useMemo(() => {
-    const unlocked = new Set<number>();
-    lessons.forEach((lesson, index) => {
-      if (index === 0) {
-        unlocked.add(lesson.id);
-        return;
-      }
-      const previousLesson = lessons[index - 1];
-      if (previousLesson?.completed) {
-        unlocked.add(lesson.id);
-      }
-    });
-    return unlocked;
-  }, [lessons]);
-
   const selectedLesson = lessons.find((lesson) => lesson.id === selectedLessonId) ?? null;
   const topicsForSelectedLesson = selectedLesson ? topicsByLessonId[selectedLesson.id] ?? [] : [];
   const selectedLessonContent = selectedLesson ? lessonContentByLessonId[selectedLesson.id] ?? [] : [];
@@ -354,15 +615,6 @@ export function ModuleViewerPage() {
     topic,
     sections: contentByTopicId[topic.id] ?? [],
   }));
-  const allLessonsCompleted = lessons.length > 0 && lessons.every((lesson) => lesson.completed);
-
-  const passedQuizIds = useMemo(() => {
-    const passed = new Set<number>();
-    results.forEach((result) => {
-      if (result.passed) passed.add(result.quiz_id);
-    });
-    return passed;
-  }, [results]);
 
   const latestResultByQuizId = useMemo(() => {
     const latest = new Map<number, QuizResult>();
@@ -425,7 +677,177 @@ export function ModuleViewerPage() {
     return Array.from(postTestByLessonId.values()).filter((quiz) => quiz.is_active);
   }, [postTestByLessonId]);
 
-  const allActivePostTestsPassed = activePostTests.every((quiz) => passedQuizIds.has(quiz.id));
+  const failedPostTestCyclesByLessonId = useMemo(() => {
+    const failedCyclesByLessonId: Record<number, number> = {};
+
+    postTestByLessonId.forEach((postTest, lessonId) => {
+      const attemptLimit = Math.max(postTest.attempt_limit, 1);
+      const attempts = results
+        .filter((result) => result.quiz_id === postTest.id)
+        .sort((a, b) => {
+          const attemptOrder = a.attempt_no - b.attempt_no;
+          if (attemptOrder !== 0) return attemptOrder;
+          return new Date(a.submitted_at).getTime() - new Date(b.submitted_at).getTime();
+        });
+
+      let failedCycles = 0;
+      while (true) {
+        const cycleStart = failedCycles * attemptLimit;
+        const cycleAttempts = attempts.slice(cycleStart, cycleStart + attemptLimit);
+        if (cycleAttempts.length < attemptLimit) break;
+        if (!cycleAttempts.every((attempt) => !attempt.passed)) break;
+        failedCycles += 1;
+      }
+
+      if (failedCycles > 0) {
+        failedCyclesByLessonId[lessonId] = failedCycles;
+      }
+    });
+
+    return failedCyclesByLessonId;
+  }, [postTestByLessonId, results]);
+
+  const postTestAttemptsUsedInCurrentCycleByLessonId = useMemo(() => {
+    const attemptsUsedByLessonId: Record<number, number> = {};
+    postTestByLessonId.forEach((postTest, lessonId) => {
+      const attemptLimit = Math.max(postTest.attempt_limit, 1);
+      const attempts = results
+        .filter((result) => result.quiz_id === postTest.id)
+        .sort((a, b) => {
+          const attemptOrder = a.attempt_no - b.attempt_no;
+          if (attemptOrder !== 0) return attemptOrder;
+          return new Date(a.submitted_at).getTime() - new Date(b.submitted_at).getTime();
+        });
+      const failedCycles = failedPostTestCyclesByLessonId[lessonId] ?? 0;
+      const cycleStart = failedCycles * attemptLimit;
+      attemptsUsedByLessonId[lessonId] = attempts.slice(cycleStart).length;
+    });
+    return attemptsUsedByLessonId;
+  }, [failedPostTestCyclesByLessonId, postTestByLessonId, results]);
+
+  const postTestPassedInCurrentCycleByLessonId = useMemo(() => {
+    const passedInCurrentCycleByLessonId: Record<number, boolean> = {};
+    postTestByLessonId.forEach((postTest, lessonId) => {
+      const attemptLimit = Math.max(postTest.attempt_limit, 1);
+      const attempts = results
+        .filter((result) => result.quiz_id === postTest.id)
+        .sort((a, b) => {
+          const attemptOrder = a.attempt_no - b.attempt_no;
+          if (attemptOrder !== 0) return attemptOrder;
+          return new Date(a.submitted_at).getTime() - new Date(b.submitted_at).getTime();
+        });
+      const failedCycles = failedPostTestCyclesByLessonId[lessonId] ?? 0;
+      const cycleStart = failedCycles * attemptLimit;
+      passedInCurrentCycleByLessonId[lessonId] = attempts.slice(cycleStart).some((attempt) => attempt.passed);
+    });
+    return passedInCurrentCycleByLessonId;
+  }, [failedPostTestCyclesByLessonId, postTestByLessonId, results]);
+
+  const effectiveLessonCompletedById = useMemo(() => {
+    const map = new Map<number, boolean>();
+    lessons.forEach((lesson) => {
+      map.set(lesson.id, lesson.completed && !lessonResetRequiredByLessonId[lesson.id]);
+    });
+    return map;
+  }, [lessons, lessonResetRequiredByLessonId]);
+
+  const allLessonsCompleted = lessons.length > 0 && lessons.every((lesson) => effectiveLessonCompletedById.get(lesson.id));
+
+  const lessonReadyForProgressionById = useMemo(() => {
+    const readiness = new Map<number, boolean>();
+    lessons.forEach((lesson) => {
+      const postTest = postTestByLessonId.get(lesson.id) ?? null;
+      const postTestRequirementMet = !postTest || !postTest.is_active || Boolean(postTestPassedInCurrentCycleByLessonId[lesson.id]);
+      readiness.set(lesson.id, Boolean(effectiveLessonCompletedById.get(lesson.id)) && postTestRequirementMet);
+    });
+    return readiness;
+  }, [effectiveLessonCompletedById, lessons, postTestByLessonId, postTestPassedInCurrentCycleByLessonId]);
+
+  const unlockedLessonIds = useMemo(() => {
+    if (isPreviewBypassMode) {
+      return new Set(lessons.map((lesson) => lesson.id));
+    }
+
+    const unlocked = new Set<number>();
+    lessons.forEach((lesson, index) => {
+      if (index === 0) {
+        unlocked.add(lesson.id);
+        return;
+      }
+      const previousLesson = lessons[index - 1];
+      if (previousLesson && lessonReadyForProgressionById.get(previousLesson.id)) {
+        unlocked.add(lesson.id);
+      }
+    });
+    return unlocked;
+  }, [isPreviewBypassMode, lessons, lessonReadyForProgressionById]);
+
+  const allActivePostTestsPassed = activePostTests.every((quiz) => {
+    if (quiz.lesson_id === null) return false;
+    return Boolean(postTestPassedInCurrentCycleByLessonId[Number(quiz.lesson_id)]);
+  });
+  const moduleProgressPercent = useMemo(() => {
+    const lessonUnitCount = lessons.length;
+    const includePreTest = Boolean(primaryPreTest?.is_active);
+    const includeFinalExam = Boolean(finalExam?.is_active);
+    const assessmentUnitCount = (includePreTest ? 1 : 0) + (includeFinalExam ? 1 : 0);
+    const totalUnits = lessonUnitCount + assessmentUnitCount;
+
+    if (totalUnits === 0) {
+      return Math.max(0, Math.min(100, Math.round(completionPercent)));
+    }
+
+    const lessonUnitProgressSum = lessons.reduce((sum, lesson) => {
+      const lessonCompleted = Boolean(effectiveLessonCompletedById.get(lesson.id));
+      const lessonContentProgressPercent = lessonCompleted
+        ? 100
+        : Math.max(0, Math.min(100, Math.round(readProgressByLessonId[lesson.id] ?? 0)));
+      const lessonPostTest = postTestByLessonId.get(lesson.id) ?? null;
+      const lessonHasActivePostTest = Boolean(lessonPostTest?.is_active);
+      const lessonPostTestSharePercent = lessonHasActivePostTest ? 20 : 0;
+      const lessonContentSharePercent = 100 - lessonPostTestSharePercent;
+      const lessonPostTestRequirementMet =
+        !lessonPostTest || !lessonPostTest.is_active || Boolean(postTestPassedInCurrentCycleByLessonId[lesson.id]);
+      const lessonProgressPercent = Math.max(
+        0,
+        Math.min(
+          100,
+          Math.round(
+            (lessonContentProgressPercent * lessonContentSharePercent) / 100 +
+              (lessonPostTestRequirementMet ? lessonPostTestSharePercent : 0)
+          )
+        )
+      );
+
+      return sum + lessonProgressPercent / 100;
+    }, 0);
+
+    const preTestUnitProgress =
+      includePreTest && primaryPreTest
+        ? latestResultByQuizId.get(primaryPreTest.id)?.passed
+          ? 1
+          : 0
+        : 0;
+    const finalExamUnitProgress =
+      includeFinalExam && finalExam
+        ? latestResultByQuizId.get(finalExam.id)?.passed
+          ? 1
+          : 0
+        : 0;
+
+    const overallProgress = (lessonUnitProgressSum + preTestUnitProgress + finalExamUnitProgress) / totalUnits;
+    return Math.max(0, Math.min(100, Math.round(overallProgress * 100)));
+  }, [
+    completionPercent,
+    effectiveLessonCompletedById,
+    finalExam,
+    lessons,
+    latestResultByQuizId,
+    postTestByLessonId,
+    postTestPassedInCurrentCycleByLessonId,
+    primaryPreTest,
+    readProgressByLessonId,
+  ]);
   const finalExamReady = Boolean(finalExam) && allLessonsCompleted && allActivePostTestsPassed;
 
   const getAssessmentStage = (quiz: QuizSummary): AssessmentStage => {
@@ -434,6 +856,7 @@ export function ModuleViewerPage() {
   };
 
   const isAssessmentUnlocked = (quiz: QuizSummary) => {
+    if (isPreviewBypassMode) return true;
     if (!quiz.is_active) return false;
     const stage = getAssessmentStage(quiz);
 
@@ -443,14 +866,16 @@ export function ModuleViewerPage() {
       if (quiz.lesson_id === null) return false;
       const lesson = lessonById.get(Number(quiz.lesson_id));
       if (!lesson) return false;
-      const lessonUnlocked = unlockedLessonIds.has(lesson.id) || lesson.completed;
-      return lessonUnlocked && Boolean(lesson.completed);
+      const lessonCompleted = Boolean(effectiveLessonCompletedById.get(lesson.id));
+      const lessonUnlocked = unlockedLessonIds.has(lesson.id) || lessonCompleted;
+      return lessonUnlocked && lessonCompleted;
     }
 
     return finalExamReady;
   };
 
   const assessmentUnlockMessage = (quiz: QuizSummary) => {
+    if (isPreviewBypassMode) return 'Preview mode: lock bypass enabled.';
     const stage = getAssessmentStage(quiz);
     if (!quiz.is_active) return 'Assessment is inactive.';
 
@@ -461,7 +886,10 @@ export function ModuleViewerPage() {
     if (stage === 'post') {
       const lesson = quiz.lesson_id !== null ? lessonById.get(Number(quiz.lesson_id)) : null;
       if (!lesson) return 'Lesson mapping not found.';
-      if (!lesson.completed) return 'Complete the lesson first to unlock this Post-Test.';
+      if (lessonResetRequiredByLessonId[lesson.id]) {
+        return 'Review all lesson content again to unlock this Post-Test.';
+      }
+      if (!effectiveLessonCompletedById.get(lesson.id)) return 'Complete the lesson first to unlock this Post-Test.';
       return 'Ready to start.';
     }
 
@@ -473,10 +901,21 @@ export function ModuleViewerPage() {
   const selectedAssessment = selectedAssessmentId
     ? quizzes.find((quiz) => quiz.id === selectedAssessmentId) ?? null
     : null;
+  const selectedAssessmentStage = selectedAssessment ? getAssessmentStage(selectedAssessment) : null;
+  const selectedAssessmentLessonId =
+    selectedAssessment?.lesson_id !== null && selectedAssessment?.lesson_id !== undefined
+      ? Number(selectedAssessment.lesson_id)
+      : null;
 
   const isQuizOngoing = quizInProgressId !== null && quizSessionResult === null;
   const selectedAssessmentAttemptCount = selectedAssessment
-    ? results.filter((result) => result.quiz_id === selectedAssessment.id).length
+    ? (() => {
+        const totalAttempts = results.filter((result) => result.quiz_id === selectedAssessment.id).length;
+        if (selectedAssessmentStage !== 'post' || selectedAssessmentLessonId === null) {
+          return totalAttempts;
+        }
+        return postTestAttemptsUsedInCurrentCycleByLessonId[selectedAssessmentLessonId] ?? totalAttempts;
+      })()
     : 0;
   const selectedAssessmentAttemptsRemaining = selectedAssessment
     ? Math.max(selectedAssessment.attempt_limit - selectedAssessmentAttemptCount, 0)
@@ -486,7 +925,13 @@ export function ModuleViewerPage() {
     : false;
 
   const currentQuizQuestion = isSelectedAssessmentOngoing ? quizQuestions[quizCurrentIndex] ?? null : null;
-  const currentQuizAnswerId = currentQuizQuestion ? quizAnswers[currentQuizQuestion.id] : undefined;
+  const currentQuizAnswerIds = currentQuizQuestion ? quizAnswers[currentQuizQuestion.id] ?? [] : [];
+  const isCurrentQuestionMultipleChoice = currentQuizQuestion?.question_type === 'multiple_choice';
+  const currentQuizMaxSelections =
+    currentQuizQuestion && isCurrentQuestionMultipleChoice
+      ? Math.max(1, Number(currentQuizQuestion.max_selections) || 1)
+      : 1;
+  const hasCurrentQuizAnswer = currentQuizAnswerIds.length > 0;
   const isCurrentQuestionSubmitted = currentQuizQuestion
     ? Boolean(quizSubmittedByQuestionId[currentQuizQuestion.id])
     : false;
@@ -496,8 +941,10 @@ export function ModuleViewerPage() {
   const selectedAssessmentLatestResult =
     selectedAssessmentSessionResult ??
     (selectedAssessment ? (latestResultByQuizId.get(selectedAssessment.id) ?? null) : null);
-  const selectedAssessmentStage = selectedAssessment ? getAssessmentStage(selectedAssessment) : null;
   const isSimulationAssessment = selectedAssessmentStage === 'final';
+  const selectedAssessmentDisplayResult =
+    selectedAssessmentSessionResult ??
+    (!isSimulationAssessment && selectedAssessmentAttemptsRemaining <= 0 ? selectedAssessmentLatestResult : null);
 
   const sequenceItems = useMemo(() => {
     const items: SequenceItem[] = [];
@@ -514,7 +961,7 @@ export function ModuleViewerPage() {
     }
 
     lessons.forEach((lesson) => {
-      const lessonUnlocked = unlockedLessonIds.has(lesson.id) || lesson.completed;
+      const lessonUnlocked = unlockedLessonIds.has(lesson.id) || Boolean(effectiveLessonCompletedById.get(lesson.id));
 
       items.push({
         key: `lesson-${lesson.id}`,
@@ -549,6 +996,7 @@ export function ModuleViewerPage() {
 
     return items;
   }, [
+    effectiveLessonCompletedById,
     finalExam,
     isAssessmentUnlocked,
     lessonById,
@@ -594,8 +1042,40 @@ export function ModuleViewerPage() {
     setIsMutating(true);
     setError('');
     try {
+      if (isPreviewMode) {
+        setLessons((previous) =>
+          previous.map((lesson) =>
+            lesson.id === lessonIdValue
+              ? { ...lesson, completed: true, completedAt: new Date().toISOString() }
+              : lesson
+          )
+        );
+        setReadProgressByLessonId((previous) => ({ ...previous, [lessonIdValue]: 100 }));
+        setPostTestRecoveredCycleByLessonId((previous) => ({
+          ...previous,
+          [lessonIdValue]: failedPostTestCyclesByLessonId[lessonIdValue] ?? 0,
+        }));
+        setLessonResetRequiredByLessonId((previous) => {
+          if (!previous[lessonIdValue]) return previous;
+          const next = { ...previous };
+          delete next[lessonIdValue];
+          return next;
+        });
+        return;
+      }
+
       await completeLesson(enrollment.id, lessonIdValue);
       setReadProgressByLessonId((previous) => ({ ...previous, [lessonIdValue]: 100 }));
+      setPostTestRecoveredCycleByLessonId((previous) => ({
+        ...previous,
+        [lessonIdValue]: failedPostTestCyclesByLessonId[lessonIdValue] ?? 0,
+      }));
+      setLessonResetRequiredByLessonId((previous) => {
+        if (!previous[lessonIdValue]) return previous;
+        const next = { ...previous };
+        delete next[lessonIdValue];
+        return next;
+      });
       await reload();
     } catch (updateError) {
       setError(updateError instanceof Error ? updateError.message : 'Failed to complete lesson.');
@@ -619,6 +1099,73 @@ export function ModuleViewerPage() {
     setQuizTerminalLogs([]);
   };
 
+  useEffect(() => {
+    const lessonsToReset = lessons
+      .map((lesson) => lesson.id)
+      .filter((lessonId) => {
+        const failedCycles = failedPostTestCyclesByLessonId[lessonId] ?? 0;
+        const recoveredCycles = postTestRecoveredCycleByLessonId[lessonId] ?? 0;
+        return failedCycles > recoveredCycles && !lessonResetRequiredByLessonId[lessonId];
+      });
+
+    if (lessonsToReset.length === 0) return;
+
+    setLessonResetRequiredByLessonId((previous) => {
+      const next = { ...previous };
+      lessonsToReset.forEach((lessonId) => {
+        next[lessonId] = true;
+      });
+      return next;
+    });
+
+    setReadProgressByLessonId((previous) => {
+      const next = { ...previous };
+      lessonsToReset.forEach((lessonId) => {
+        next[lessonId] = 0;
+      });
+      return next;
+    });
+
+    setViewedStepKeysByLessonId((previous) => {
+      const next = { ...previous };
+      lessonsToReset.forEach((lessonId) => {
+        next[lessonId] = {};
+      });
+      return next;
+    });
+
+    setActiveLessonStepIndexByLessonId((previous) => {
+      const next = { ...previous };
+      lessonsToReset.forEach((lessonId) => {
+        next[lessonId] = 0;
+      });
+      return next;
+    });
+
+    const focusedResetLessonId =
+      selectedAssessmentLessonId !== null && lessonsToReset.includes(selectedAssessmentLessonId)
+        ? selectedAssessmentLessonId
+        : selectedLessonId !== null && lessonsToReset.includes(selectedLessonId)
+          ? selectedLessonId
+          : lessonsToReset[0] ?? null;
+
+    if (focusedResetLessonId !== null) {
+      setSelectedAssessmentId(null);
+      setSelectedLessonId(focusedResetLessonId);
+      setExpandedLessonIds({ [focusedResetLessonId]: true });
+      resetQuizSession();
+    }
+
+    setError('Post-Test failed 3 times. Lesson progress reset to 0%. Review all lesson content to unlock another 3 attempts.');
+  }, [
+    failedPostTestCyclesByLessonId,
+    lessonResetRequiredByLessonId,
+    lessons,
+    postTestRecoveredCycleByLessonId,
+    selectedAssessmentLessonId,
+    selectedLessonId,
+  ]);
+
   const handleStartQuiz = async (quiz: QuizSummary) => {
     if (!enrollment) return;
     setIsQuizLoading(true);
@@ -626,6 +1173,28 @@ export function ModuleViewerPage() {
     setIsResultProcessing(false);
     setQuizSessionResult(null);
     try {
+      if (isPreviewMode) {
+        const previewQuestions = (quizPreviewByQuizId[quiz.id] ?? []).map((question) => ({
+          ...question,
+          answers: question.answers.map((answer) => ({ ...answer })),
+        }));
+        setQuizQuestions(previewQuestions);
+        setQuizAnswers({});
+        setQuizSubmittedByQuestionId({});
+        setQuizCurrentIndex(0);
+        setQuizInProgressId(quiz.id);
+        setIsSubmitConfirmOpen(false);
+        setQuizTerminalLogs([
+          `> [boot] Preview assessment session initialized`,
+          `> [auth] Admin preview mode (no user progress recording)`,
+          `> [quiz] ${quiz.title}`,
+          `> [load] ${previewQuestions.length} questions prepared`,
+          `> [mode] Sequential lock enabled (submit to continue)`,
+          `> [ready] Question 1 awaiting answer`,
+        ]);
+        return;
+      }
+
       const payload = await startQuiz(enrollment.id, quiz.id);
       setQuizQuestions(payload.questions);
       setQuizPreviewByQuizId((previous) => ({ ...previous, [quiz.id]: payload.questions }));
@@ -651,13 +1220,17 @@ export function ModuleViewerPage() {
 
   const handleSubmitCurrentQuestion = () => {
     if (!currentQuizQuestion || !selectedAssessment) return;
-    if (!currentQuizAnswerId) {
+    if (!hasCurrentQuizAnswer) {
       setError('Please select an answer before submitting this question.');
       return;
     }
+    const selectedAnswerTexts = currentQuizQuestion.answers
+      .filter((answer) => currentQuizAnswerIds.includes(answer.id))
+      .map((answer) => answer.answer_text);
     const selectedAnswerText =
-      currentQuizQuestion.answers.find((answer) => answer.id === currentQuizAnswerId)?.answer_text ??
-      `Answer ${currentQuizAnswerId}`;
+      selectedAnswerTexts.length > 0
+        ? selectedAnswerTexts.join(' | ')
+        : `Answer ${currentQuizAnswerIds[0] ?? ''}`;
     const compactAnswerText =
       selectedAnswerText.length > 56 ? `${selectedAnswerText.slice(0, 53).trimEnd()}...` : selectedAnswerText;
     appendTerminalLog(`[q${quizCurrentIndex + 1}] Captured answer -> "${compactAnswerText}"`);
@@ -693,13 +1266,83 @@ export function ModuleViewerPage() {
       await wait(220);
       appendTerminalLog('[sync] Sending answers to validation service...');
       await wait(220);
+      if (isPreviewMode) {
+        const totalPoints = quizQuestions.reduce((sum, question) => sum + Number(question.points || 0), 0);
+        let earnedPoints = 0;
+
+        quizQuestions.forEach((question) => {
+          const selected = Array.from(new Set((quizAnswers[question.id] ?? []).map((answerId) => Number(answerId))))
+            .filter((answerId) => Number.isFinite(answerId));
+          if (selected.length === 0) return;
+
+          const answerMap = new Map(question.answers.map((answer) => [Number(answer.id), answer]));
+          const selectedValid = selected.filter((answerId) => answerMap.has(answerId));
+          if (selectedValid.length === 0) return;
+
+          const correctSet = new Set(
+            question.answers.filter((answer) => Boolean(answer.is_correct)).map((answer) => Number(answer.id))
+          );
+          const effectiveType =
+            question.question_type === 'multiple_choice' || correctSet.size > 1 ? 'multiple_choice' : 'single_choice';
+          const maxSelections = effectiveType === 'multiple_choice' ? Math.max(1, Number(question.max_selections) || 1) : 1;
+          if (selectedValid.length > Math.max(maxSelections, correctSet.size)) return;
+
+          if (effectiveType === 'multiple_choice') {
+            const selectedSet = new Set(selectedValid);
+            const exactMatch =
+              selectedSet.size === correctSet.size &&
+              [...correctSet].every((correctId) => selectedSet.has(correctId));
+            if (exactMatch) earnedPoints += Number(question.points || 0);
+            return;
+          }
+
+          if (correctSet.has(selectedValid[0])) {
+            earnedPoints += Number(question.points || 0);
+          }
+        });
+
+        const score = totalPoints <= 0 ? 0 : Number(((earnedPoints / totalPoints) * 100).toFixed(2));
+        const passed = score >= Number(selectedAssessment.passing_score || 0);
+        const attemptNo = results.filter((result) => result.quiz_id === selectedAssessment.id).length + 1;
+        const previewResult: QuizResult = {
+          id: Date.now(),
+          enrollment_id: enrollment.id,
+          user_id: 0,
+          quiz_id: selectedAssessment.id,
+          attempt_no: attemptNo,
+          score,
+          passed,
+          submitted_at: new Date().toISOString(),
+          feedback: {
+            earnedPoints,
+            totalPoints,
+          },
+          quiz_title: selectedAssessment.title,
+          module_title: moduleTitle,
+        };
+
+        await wait(260);
+        appendTerminalLog('[verify] Cross-checking responses...');
+        await wait(220);
+        appendTerminalLog(`[result] Score ${Number(previewResult.score).toFixed(0)}%`);
+        appendTerminalLog(`[result] Status ${previewResult.passed ? 'PASSED' : 'FAILED'} | Attempt #${previewResult.attempt_no}`);
+        appendTerminalLog('[preview] Results stored locally for testing only.');
+        setQuizSessionResult(previewResult);
+        setQuizInProgressId(null);
+        setIsSubmitConfirmOpen(false);
+        setResults((previous) => [previewResult, ...previous]);
+        return;
+      }
+
       const payload = await submitQuiz(
         enrollment.id,
         selectedAssessment.id,
-        Object.entries(quizAnswers).map(([questionId, answerId]) => ({
-          questionId: Number(questionId),
-          answerId,
-        }))
+        Object.entries(quizAnswers).flatMap(([questionId, answerIds]) =>
+          (answerIds ?? []).map((answerId) => ({
+            questionId: Number(questionId),
+            answerId,
+          }))
+        )
       );
       await wait(260);
       appendTerminalLog('[verify] Cross-checking responses...');
@@ -721,14 +1364,68 @@ export function ModuleViewerPage() {
   };
 
   const selectLesson = (lesson: LessonSummary) => {
-    const lessonUnlocked = unlockedLessonIds.has(lesson.id) || lesson.completed;
+    const lessonUnlocked = unlockedLessonIds.has(lesson.id) || Boolean(effectiveLessonCompletedById.get(lesson.id));
     if (!lessonUnlocked || isQuizOngoing) return;
-    setActiveLessonStepIndexByLessonId((previous) => {
-      if (typeof previous[lesson.id] === 'number') return previous;
-      return { ...previous, [lesson.id]: 0 };
-    });
+    setActiveLessonStepIndexByLessonId((previous) => ({ ...previous, [lesson.id]: 0 }));
     setSelectedLessonId(lesson.id);
     setSelectedAssessmentId(null);
+    setExpandedLessonIds({ [lesson.id]: true });
+    setError('');
+    resetQuizSession();
+  };
+
+  const handleToggleQuizAnswer = (answerId: number) => {
+    if (!currentQuizQuestion || isCurrentQuestionSubmitted) return;
+    setError('');
+
+    if (isCurrentQuestionMultipleChoice) {
+      const isAlreadySelected = currentQuizAnswerIds.includes(answerId);
+      if (!isAlreadySelected && currentQuizAnswerIds.length >= currentQuizMaxSelections) {
+        setError(`You can select up to ${currentQuizMaxSelections} answers for this question.`);
+        return;
+      }
+
+      setQuizAnswers((previous) => {
+        const currentAnswers = previous[currentQuizQuestion.id] ?? [];
+        const hasAnswer = currentAnswers.includes(answerId);
+        return {
+          ...previous,
+          [currentQuizQuestion.id]: hasAnswer
+            ? currentAnswers.filter((id) => id !== answerId)
+            : [...currentAnswers, answerId],
+        };
+      });
+      return;
+    }
+
+    setQuizAnswers((previous) => ({
+      ...previous,
+      [currentQuizQuestion.id]: [answerId],
+    }));
+  };
+
+  const handleLessonDropdownToggle = (lesson: LessonSummary) => {
+    const lessonUnlocked = unlockedLessonIds.has(lesson.id) || Boolean(effectiveLessonCompletedById.get(lesson.id));
+    if (!lessonUnlocked || isQuizOngoing) return;
+    setExpandedLessonIds((previous) => (previous[lesson.id] ? {} : { [lesson.id]: true }));
+  };
+
+  const selectLessonTopic = (lesson: LessonSummary, topic: TopicSummary) => {
+    const lessonUnlocked = unlockedLessonIds.has(lesson.id) || Boolean(effectiveLessonCompletedById.get(lesson.id));
+    if (!lessonUnlocked || isQuizOngoing) return;
+
+    const orderedTopics = topicsByLessonId[lesson.id] ?? [];
+    const topicIndex = orderedTopics.findIndex((item) => item.id === topic.id);
+    const nextStepIndex = topicIndex >= 0 ? topicIndex + 1 : 0;
+
+    setActiveLessonStepIndexByLessonId((previous) => ({
+      ...previous,
+      [lesson.id]: nextStepIndex,
+    }));
+    setSelectedLessonId(lesson.id);
+    setSelectedAssessmentId(null);
+    setExpandedLessonIds({ [lesson.id]: true });
+    setError('');
     resetQuizSession();
   };
 
@@ -740,6 +1437,7 @@ export function ModuleViewerPage() {
     if (quiz.lesson_id !== null) {
       const lessonId = Number(quiz.lesson_id);
       setSelectedLessonId(lessonId);
+      setExpandedLessonIds({ [lessonId]: true });
     }
 
     setSelectedAssessmentId(quiz.id);
@@ -818,16 +1516,17 @@ export function ModuleViewerPage() {
       ? 0
       : Math.max(0, Math.min(selectedLessonSteps.length - 1, selectedLessonStepIndexRaw));
   const selectedLessonStep = selectedLessonSteps[selectedLessonStepIndex] ?? null;
+  const isSelectedLessonCompleted = selectedLesson ? Boolean(effectiveLessonCompletedById.get(selectedLesson.id)) : false;
   const selectedLessonViewedStepKeys = selectedLesson ? viewedStepKeysByLessonId[selectedLesson.id] ?? {} : {};
   const selectedLessonViewedStepCount = selectedLesson
-    ? selectedLesson.completed
+    ? isSelectedLessonCompleted
       ? selectedLessonSteps.length
       : selectedLessonSteps.reduce((count, step) => count + (selectedLessonViewedStepKeys[step.key] ? 1 : 0), 0)
     : 0;
   const isCurrentLessonStepViewed = selectedLessonStep
-    ? Boolean(selectedLesson?.completed || selectedLessonViewedStepKeys[selectedLessonStep.key])
+    ? Boolean(isSelectedLessonCompleted || selectedLessonViewedStepKeys[selectedLessonStep.key])
     : false;
-  const selectedLessonCanAdvance = Boolean(selectedLesson?.completed || isCurrentLessonStepViewed);
+  const selectedLessonCanAdvance = Boolean(isSelectedLessonCompleted || isCurrentLessonStepViewed);
   const hasPreviousLessonStep = selectedLessonStepIndex > 0;
   const hasNextLessonStep = selectedLessonStepIndex < selectedLessonSteps.length - 1;
   const isLessonStepMode = Boolean(selectedLesson) && !selectedAssessment && selectedLessonSteps.length > 0;
@@ -844,6 +1543,8 @@ export function ModuleViewerPage() {
   const contentTitleDisplay = selectedLessonStepPositionLabel || lessonTitleDisplay;
   const globalToolbarTitle = selectedAssessment?.title ?? (!selectedLesson ? moduleTitle || 'Module' : '');
   const isLessonOrTopicView = Boolean(selectedLesson) && !selectedAssessment;
+  const richTextContentClassName =
+    'max-w-none space-y-3 text-sm leading-relaxed text-slate-200 [overflow-wrap:anywhere] [&_h1]:text-2xl [&_h1]:font-bold [&_h1]:text-white [&_h2]:text-xl [&_h2]:font-semibold [&_h2]:text-white [&_h3]:text-lg [&_h3]:font-semibold [&_h3]:text-white [&_li]:ml-5 [&_li]:list-disc [&_ol>li]:list-decimal [&_p]:text-slate-200 [&_img]:h-auto [&_img]:max-w-full';
 
   const updateSelectedLessonReadProgress = () => {
     if (!selectedLesson || selectedAssessment || !selectedLessonStep) return;
@@ -855,12 +1556,12 @@ export function ModuleViewerPage() {
     const nextStepPercent = Math.max(0, Math.min(100, rawStepPercent));
 
     const totalSteps = selectedLessonSteps.length || 1;
-    const isStepAlreadyViewed = selectedLesson.completed || Boolean(selectedLessonViewedStepKeys[selectedLessonStep.key]);
-    const viewedCountBefore = selectedLesson.completed ? totalSteps : selectedLessonViewedStepCount;
+    const isStepAlreadyViewed = isSelectedLessonCompleted || Boolean(selectedLessonViewedStepKeys[selectedLessonStep.key]);
+    const viewedCountBefore = isSelectedLessonCompleted ? totalSteps : selectedLessonViewedStepCount;
     const viewedCountAfter =
       isStepAlreadyViewed || nextStepPercent < 99 ? viewedCountBefore : viewedCountBefore + 1;
 
-    const aggregateProgress = selectedLesson.completed
+    const aggregateProgress = isSelectedLessonCompleted
       ? 100
       : isStepAlreadyViewed
         ? Math.round((viewedCountBefore / totalSteps) * 100)
@@ -869,7 +1570,7 @@ export function ModuleViewerPage() {
 
     setReadProgressByLessonId((previous) => {
       const current = previous[selectedLesson.id] ?? 0;
-      if (selectedLesson.completed) {
+      if (isSelectedLessonCompleted) {
         if (current === 100) return previous;
         return { ...previous, [selectedLesson.id]: 100 };
       }
@@ -877,7 +1578,7 @@ export function ModuleViewerPage() {
       return { ...previous, [selectedLesson.id]: nextProgress };
     });
 
-    if (!selectedLesson.completed && nextStepPercent >= 99) {
+    if (!isSelectedLessonCompleted && nextStepPercent >= 99) {
       setViewedStepKeysByLessonId((previous) => {
         const lessonViewedSteps = previous[selectedLesson.id] ?? {};
         if (lessonViewedSteps[selectedLessonStep.key]) return previous;
@@ -892,7 +1593,7 @@ export function ModuleViewerPage() {
     }
 
     if (
-      !selectedLesson.completed &&
+      !isSelectedLessonCompleted &&
       viewedCountAfter >= totalSteps &&
       !isMutating &&
       !completeInFlightLessonIdsRef.current[selectedLesson.id]
@@ -913,7 +1614,7 @@ export function ModuleViewerPage() {
     return () => window.cancelAnimationFrame(frameId);
   }, [
     selectedLesson?.id,
-    selectedLesson?.completed,
+    isSelectedLessonCompleted,
     selectedAssessment?.id,
     selectedLessonStep?.key,
     selectedLessonStepIndex,
@@ -966,40 +1667,53 @@ export function ModuleViewerPage() {
     : isQuizOngoing || isNextSequenceLocked;
 
   return (
-    <section className="space-y-4">
+    <section className={isPreviewMode ? 'h-full' : 'space-y-4'}>
       {error ? <p className="rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{error}</p> : null}
       {isLoading ? <p className="text-sm text-slate-400">Loading module content...</p> : null}
 
       {!isLoading ? (
         <div
-          className={`grid gap-5 xl:h-[calc(100vh-7.5rem)] ${
+          className={`grid gap-5 ${isPreviewMode ? 'h-full' : 'xl:h-[calc(100vh-7.5rem)]'} ${
             isSidebarCollapsed ? 'grid-cols-1' : 'xl:grid-cols-[536px_minmax(0,1fr)]'
           }`}
         >
           {!isSidebarCollapsed ? (
-            <aside className="no-scrollbar rounded-xl border border-white/10 bg-slate-900/70 p-5 shadow-sm xl:sticky xl:top-20 xl:h-[calc(100vh-7.5rem)] xl:overflow-y-auto">
-            <div className="mb-3">
-              <Link
-                to="/user/modules"
-                className="inline-flex items-center gap-1 rounded-md border border-white/15 bg-slate-900/70 px-3 py-1.5 text-xs font-semibold text-slate-100 hover:bg-white/10"
-              >
-                <ChevronLeft size={14} />
-                Back to Modules
-              </Link>
-            </div>
+            <aside
+              className={`no-scrollbar rounded-xl border border-white/10 bg-slate-900/70 p-5 shadow-sm ${
+                isPreviewMode ? 'h-full overflow-y-auto' : 'xl:sticky xl:top-20 xl:h-[calc(100vh-7.5rem)] xl:overflow-y-auto'
+              }`}
+            >
             <div className="rounded-xl border border-white/10 bg-white/5 p-4">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">
+              {isPreviewMode ? (
+                <span className="inline-flex items-center gap-1 text-sm font-medium text-slate-300">
+                  <ChevronLeft size={14} />
+                  Modules
+                </span>
+              ) : (
+                <Link
+                  to="/user/modules"
+                  className="inline-flex items-center gap-1 text-sm font-medium text-slate-300 hover:text-white"
+                >
+                  <ChevronLeft size={14} />
+                  Modules
+                </Link>
+              )}
+              <p className="mt-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">
                 Module {moduleIdNumber || '--'}
               </p>
-              <p className="mt-1 text-base font-semibold text-white">{moduleTitle || 'Untitled Module'}</p>
-              <div className="mt-3 flex items-center justify-between text-[11px] text-slate-400">
-                <span>Progress</span>
-                <span className="font-semibold text-brand-300">{completionPercent}%</span>
+              <div className="mt-2 flex items-end justify-between gap-3">
+                <p className="truncate text-[24px] font-semibold leading-tight tracking-tight text-white">
+                  {moduleTitle || 'Untitled Module'}
+                </p>
+                <div className="text-right">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400">Progress</p>
+                  <p className="text-[22px] font-semibold leading-none text-brand-300">{moduleProgressPercent}%</p>
+                </div>
               </div>
-              <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-800/70">
+              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-800/70">
                 <div
                   className="h-full rounded-full bg-brand-500"
-                  style={{ width: `${Math.max(0, Math.min(100, completionPercent))}%` }}
+                  style={{ width: `${Math.max(0, Math.min(100, moduleProgressPercent))}%` }}
                 />
               </div>
             </div>
@@ -1026,34 +1740,43 @@ export function ModuleViewerPage() {
                       <span className="absolute left-0.5 top-2 inline-flex h-6 w-6 items-center justify-center rounded-full border border-violet-400/40 bg-violet-500/20 text-violet-200">
                         <ClipboardList size={13} />
                       </span>
-                      <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-violet-200">Pre-Test</p>
-                      <p className="mt-0.5 text-[15px] font-semibold text-white">{primaryPreTest.title}</p>
-                      <p className="mt-1 text-[12px] text-slate-300">
-                        {(() => {
-                          const latest = latestResultByQuizId.get(primaryPreTest.id);
-                          if (!latest) return 'No attempts yet';
-                          return `Latest ${Number(latest.score)}% (${latest.passed ? 'Passed' : 'Failed'})`;
-                        })()}
-                      </p>
+                      <div className="min-w-0">
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-violet-200">Pre-Test</p>
+                        <p className="mt-0.5 truncate text-[15px] font-semibold text-white">{primaryPreTest.title}</p>
+                      </div>
                     </button>
                   </div>
                 ) : null}
 
                 {lessons.map((lesson, lessonIndex) => {
-                  const lessonUnlocked = unlockedLessonIds.has(lesson.id) || lesson.completed;
+                  const lessonCompleted = Boolean(effectiveLessonCompletedById.get(lesson.id));
+                  const lessonUnlocked = unlockedLessonIds.has(lesson.id) || lessonCompleted;
                   const lessonPostTest = postTestByLessonId.get(lesson.id) ?? null;
-                  const lessonProgressPercent = lesson.completed
+                  const lessonHasActivePostTest = Boolean(lessonPostTest?.is_active);
+                  const lessonPostTestRequirementMet =
+                    !lessonPostTest || !lessonPostTest.is_active || Boolean(postTestPassedInCurrentCycleByLessonId[lesson.id]);
+                  const lessonReadyForProgression = lessonReadyForProgressionById.get(lesson.id) ?? false;
+                  const lessonTopics = topicsByLessonId[lesson.id] ?? [];
+                  const lessonViewedStepKeys = viewedStepKeysByLessonId[lesson.id] ?? {};
+                  const isExpanded = Boolean(expandedLessonIds[lesson.id]);
+                  const lessonContentProgressPercent = lessonCompleted
                     ? 100
                     : Math.max(0, Math.min(100, Math.round(readProgressByLessonId[lesson.id] ?? 0)));
+                  const lessonPostTestSharePercent = lessonHasActivePostTest ? 20 : 0;
+                  const lessonContentSharePercent = 100 - lessonPostTestSharePercent;
+                  const lessonProgressPercent = Math.max(
+                    0,
+                    Math.min(
+                      100,
+                      Math.round(
+                        (lessonContentProgressPercent * lessonContentSharePercent) / 100 +
+                          (lessonPostTestRequirementMet ? lessonPostTestSharePercent : 0)
+                      )
+                    )
+                  );
                   const progressRadius = 15;
                   const progressCircumference = 2 * Math.PI * progressRadius;
                   const progressOffset = progressCircumference * (1 - lessonProgressPercent / 100);
-
-                  const lessonStatus = lesson.completed
-                    ? 'Done'
-                    : lessonUnlocked
-                      ? 'In Progress'
-                      : 'Locked';
 
                   const isLastTopLevel = lessonIndex === lessons.length - 1 && !finalExam;
 
@@ -1062,6 +1785,23 @@ export function ModuleViewerPage() {
                       {!isLastTopLevel ? (
                         <span className="absolute left-[13px] top-7 h-[calc(100%-0.25rem)] w-px bg-white/10" aria-hidden="true" />
                       ) : null}
+                      <span
+                        className={`absolute left-0.5 top-2 inline-flex h-6 w-6 items-center justify-center rounded-full border ${
+                          lessonReadyForProgression
+                            ? 'border-emerald-300/50 bg-emerald-500/20 text-emerald-100'
+                            : lessonUnlocked
+                              ? 'border-sky-300/50 bg-sky-500/20 text-sky-100'
+                              : 'border-slate-400/40 bg-slate-700/40 text-slate-300'
+                        }`}
+                      >
+                        {lessonReadyForProgression ? (
+                          <Check size={13} className="text-emerald-100" />
+                        ) : lessonUnlocked ? (
+                          <span className="inline-flex h-2 w-2 rounded-full bg-sky-100" />
+                        ) : (
+                          <Lock size={13} className="text-slate-300" />
+                        )}
+                      </span>
 
                       <div
                         className={`rounded-lg border transition ${
@@ -1070,23 +1810,21 @@ export function ModuleViewerPage() {
                             : 'border-sky-400/20 bg-sky-950/20 hover:bg-sky-500/10'
                         } ${lessonUnlocked ? '' : 'opacity-60'}`}
                       >
-                        <button
-                          type="button"
-                          onClick={() => selectLesson(lesson)}
-                          disabled={!lessonUnlocked || isQuizOngoing}
-                          className="flex w-full items-start justify-between gap-3 px-4 py-3 text-left disabled:cursor-not-allowed"
-                        >
-                          <span className="absolute left-0.5 top-2 inline-flex h-6 w-6 items-center justify-center rounded-full border border-sky-400/40 bg-sky-500/20 text-sky-200">
-                            {lessonUnlocked ? <Check size={13} /> : <Lock size={13} />}
-                          </span>
-                          <div className="min-w-0">
-                            <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-sky-200">
-                              Lesson {lesson.sequence_no}
-                            </p>
-                            <p className="truncate text-[15px] font-semibold text-white">{lesson.title}</p>
-                            <p className="mt-1 text-[12px] text-slate-300">{formatMinutesLabel(lesson.estimated_minutes)}</p>
-                          </div>
-                          <div className="flex flex-col items-end gap-1">
+                        <div className="flex items-center">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              selectLesson(lesson);
+                            }}
+                            disabled={!lessonUnlocked || isQuizOngoing}
+                            className="flex min-w-0 flex-1 items-center gap-3 px-4 py-3 text-left disabled:cursor-not-allowed"
+                          >
+                            <div className="min-w-0 flex-1">
+                              <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-sky-200">
+                                Lesson {lesson.sequence_no} · {formatMinutesLabel(lesson.estimated_minutes)}
+                              </p>
+                              <p className="truncate text-[15px] font-semibold text-white">{lesson.title}</p>
+                            </div>
                             <span className="relative inline-flex h-10 w-10 items-center justify-center">
                               <svg className="h-10 w-10" viewBox="0 0 40 40" aria-hidden="true">
                                 <circle cx="20" cy="20" r={progressRadius} fill="none" stroke="rgba(148, 163, 184, 0.35)" strokeWidth="3" />
@@ -1095,7 +1833,11 @@ export function ModuleViewerPage() {
                                   cy="20"
                                   r={progressRadius}
                                   fill="none"
-                                  stroke={lesson.completed ? 'rgb(52 211 153)' : 'rgb(14 165 233)'}
+                                  stroke={
+                                    lessonReadyForProgression
+                                      ? 'rgb(52 211 153)'
+                                      : 'rgb(14 165 233)'
+                                  }
                                   strokeWidth="3"
                                   strokeLinecap="round"
                                   strokeDasharray={`${progressCircumference}`}
@@ -1103,50 +1845,151 @@ export function ModuleViewerPage() {
                                   transform="rotate(-90 20 20)"
                                 />
                               </svg>
-                              <span className="absolute text-[9px] font-semibold text-slate-100">{lessonProgressPercent}%</span>
+                              {lessonReadyForProgression ? (
+                                <span className="absolute inline-flex h-5 w-5 items-center justify-center rounded-full bg-emerald-500/30 text-emerald-100">
+                                  <Check size={12} />
+                                </span>
+                              ) : (
+                                <span className="absolute text-[9px] font-semibold text-slate-100">
+                                  {lessonProgressPercent}%
+                                </span>
+                              )}
                             </span>
-                            <StatusPill
-                              text={lessonStatus}
-                              className={
-                                lesson.completed
-                                  ? 'border-emerald-300/30 bg-emerald-500/10 text-emerald-200'
-                                  : lessonUnlocked
-                                    ? 'border-sky-300/30 bg-sky-500/10 text-sky-200'
-                                    : 'border-slate-400/30 bg-slate-700/30 text-slate-300'
-                              }
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              handleLessonDropdownToggle(lesson);
+                            }}
+                            disabled={!lessonUnlocked || isQuizOngoing}
+                            className="inline-flex h-10 w-8 items-center justify-center text-sky-200 disabled:cursor-not-allowed disabled:opacity-60"
+                            aria-label={isExpanded ? 'Collapse lesson topics' : 'Expand lesson topics'}
+                            title={isExpanded ? 'Collapse lesson topics' : 'Expand lesson topics'}
+                          >
+                            <ChevronDown
+                              size={15}
+                              className={`transition-transform ${isExpanded ? 'rotate-180' : ''}`}
+                              aria-hidden="true"
                             />
-                          </div>
-                        </button>
+                          </button>
+                        </div>
                       </div>
 
-                      {lessonPostTest ? (
-                        <button
-                          type="button"
-                          disabled={!isAssessmentUnlocked(lessonPostTest) || (isQuizOngoing && quizInProgressId !== lessonPostTest.id)}
-                          onClick={() => selectAssessment(lessonPostTest)}
-                          className={`ml-1 mt-2 flex w-[calc(100%-0.25rem)] items-start gap-2 rounded-md border px-3 py-2.5 text-left text-sm disabled:cursor-not-allowed disabled:opacity-50 ${
-                            selectedAssessmentId === lessonPostTest.id
-                              ? 'border-orange-400/50 bg-orange-500/10 text-orange-100'
-                              : 'border-orange-400/25 bg-orange-950/20 text-orange-100 hover:bg-orange-500/10'
-                          }`}
-                        >
-                          <span className="mt-0.5 inline-flex h-2 w-2 shrink-0 rounded-full bg-orange-300" />
-                          <span className="min-w-0">
-                            <span className="block truncate font-semibold">Post-Test: {lessonPostTest.title}</span>
-                            <span className="mt-0.5 block text-xs text-slate-300">
-                              {(() => {
-                                const latest = latestResultByQuizId.get(lessonPostTest.id);
-                                if (!latest) return 'No attempts yet';
-                                return `Latest ${Number(latest.score)}% (${latest.passed ? 'Passed' : 'Failed'})`;
-                              })()}
-                            </span>
-                          </span>
-                        </button>
-                      ) : (
-                        <p className="ml-1 mt-2 w-[calc(100%-0.25rem)] rounded-md border border-white/10 bg-slate-900/60 px-3 py-2.5 text-sm text-slate-400">
-                          No Post-Test configured.
-                        </p>
-                      )}
+                      {isExpanded ? (
+                        <div className="relative ml-1 mt-2 w-[calc(100%-0.25rem)] pl-5">
+                          <span className="absolute left-2 top-1 bottom-1 w-px bg-white/10" aria-hidden="true" />
+                          <div className="space-y-2">
+                          {lessonTopics.length > 0 ? (
+                            lessonTopics.map((topic) => {
+                              const topicStepKey = `lesson-${lesson.id}-topic-${topic.id}`;
+                              const topicCompleted = lessonCompleted || Boolean(lessonViewedStepKeys[topicStepKey]);
+                              const topicProgressPercent = topicCompleted ? 100 : 0;
+                              const topicProgressRadius = 11;
+                              const topicProgressCircumference = 2 * Math.PI * topicProgressRadius;
+                              const topicProgressOffset =
+                                topicProgressCircumference * (1 - topicProgressPercent / 100);
+                              const isTopicSelected =
+                                selectedAssessmentId === null &&
+                                selectedLessonId === lesson.id &&
+                                selectedLessonStep?.kind === 'topic' &&
+                                selectedLessonStep.topic.id === topic.id;
+
+                              return (
+                                <div key={topic.id} className="relative pl-4">
+                                  <span className="absolute left-0 top-1/2 h-px w-3 -translate-y-1/2 bg-white/10" aria-hidden="true" />
+                                  <button
+                                    type="button"
+                                    disabled={!lessonUnlocked || isQuizOngoing}
+                                    onClick={() => selectLessonTopic(lesson, topic)}
+                                    className={`flex w-full items-center gap-2 rounded-md border px-2.5 py-2 text-left text-sm disabled:cursor-not-allowed disabled:opacity-60 ${
+                                      isTopicSelected
+                                        ? 'border-sky-400/50 bg-sky-500/10 text-sky-100'
+                                        : 'border-white/10 bg-slate-950/70 text-slate-200 hover:bg-white/10'
+                                    }`}
+                                  >
+                                    <span className="relative inline-flex h-7 w-7 shrink-0 items-center justify-center">
+                                      <svg className="h-7 w-7" viewBox="0 0 40 40" aria-hidden="true">
+                                        <circle
+                                          cx="20"
+                                          cy="20"
+                                          r={topicProgressRadius}
+                                          fill="none"
+                                          stroke="rgba(148, 163, 184, 0.35)"
+                                          strokeWidth="3"
+                                        />
+                                        <circle
+                                          cx="20"
+                                          cy="20"
+                                          r={topicProgressRadius}
+                                          fill="none"
+                                          stroke={topicCompleted ? 'rgb(52 211 153)' : 'rgb(20 184 166)'}
+                                          strokeWidth="3"
+                                          strokeLinecap="round"
+                                          strokeDasharray={`${topicProgressCircumference}`}
+                                          strokeDashoffset={topicProgressOffset}
+                                          transform="rotate(-90 20 20)"
+                                        />
+                                      </svg>
+                                      {topicCompleted ? (
+                                        <span className="absolute inline-flex h-4 w-4 items-center justify-center rounded-full bg-emerald-500/25 text-emerald-100">
+                                          <Check size={11} />
+                                        </span>
+                                      ) : null}
+                                    </span>
+                                    <span className="min-w-0">
+                                      <span className="block truncate font-semibold">Topic {topic.sort_order}: {topic.title}</span>
+                                    </span>
+                                  </button>
+                                </div>
+                              );
+                            })
+                          ) : (
+                            <div className="relative pl-4">
+                              <span className="absolute left-0 top-1/2 h-px w-3 -translate-y-1/2 bg-white/10" aria-hidden="true" />
+                              <p className="rounded-md border border-dashed border-white/15 px-2.5 py-2 text-xs text-slate-400">
+                                No topics configured.
+                              </p>
+                            </div>
+                          )}
+
+                          {lessonPostTest ? (
+                            <div className="relative pl-4">
+                              <span className="absolute left-0 top-1/2 h-px w-3 -translate-y-1/2 bg-white/10" aria-hidden="true" />
+                              <button
+                                type="button"
+                                disabled={!isAssessmentUnlocked(lessonPostTest) || (isQuizOngoing && quizInProgressId !== lessonPostTest.id)}
+                                onClick={() => selectAssessment(lessonPostTest)}
+                                className={`flex w-full items-center gap-2 rounded-md border px-2.5 py-2 text-left text-sm disabled:cursor-not-allowed disabled:opacity-50 ${
+                                  selectedAssessmentId === lessonPostTest.id
+                                    ? 'border-orange-400/50 bg-orange-500/10 text-orange-100'
+                                    : 'border-orange-400/25 bg-orange-950/20 text-orange-100 hover:bg-orange-500/10'
+                                }`}
+                              >
+                                <span
+                                  className={`inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full border ${
+                                    postTestPassedInCurrentCycleByLessonId[lesson.id]
+                                      ? 'border-emerald-300/70 bg-emerald-500/20 text-emerald-100'
+                                      : 'border-orange-300/40 bg-orange-500/10 text-orange-200'
+                                  }`}
+                                >
+                                  {postTestPassedInCurrentCycleByLessonId[lesson.id] ? <Check size={12} /> : null}
+                                </span>
+                                <span className="min-w-0">
+                                  <span className="block truncate font-semibold">Post-Test: {lessonPostTest.title}</span>
+                                </span>
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="relative pl-4">
+                              <span className="absolute left-0 top-1/2 h-px w-3 -translate-y-1/2 bg-white/10" aria-hidden="true" />
+                              <p className="rounded-md border border-white/10 bg-slate-950/70 px-2.5 py-2 text-xs text-slate-400">
+                                No Post-Test configured.
+                              </p>
+                            </div>
+                          )}
+                          </div>
+                        </div>
+                      ) : null}
                     </div>
                   );
                 })}
@@ -1178,9 +2021,9 @@ export function ModuleViewerPage() {
           ) : null}
 
           <div
-            className={`flex min-h-0 flex-col xl:sticky xl:top-20 xl:h-[calc(100vh-7.5rem)] xl:overflow-hidden ${
-              isLessonOrTopicView ? 'gap-0' : 'gap-4'
-            }`}
+            className={`flex min-h-0 flex-col ${
+              isPreviewMode ? 'h-full overflow-hidden' : 'xl:sticky xl:top-20 xl:h-[calc(100vh-7.5rem)] xl:overflow-hidden'
+            } ${isLessonOrTopicView ? 'gap-0' : 'gap-4'}`}
           >
             {isLessonOrTopicView ? (
               <div className="z-20 flex items-center gap-3 rounded-t-xl rounded-b-none border border-white/10 bg-slate-900/70 px-3 py-2.5 shadow-sm">
@@ -1215,7 +2058,7 @@ export function ModuleViewerPage() {
             <div
               ref={contentScrollContainerRef}
               onScroll={updateSelectedLessonReadProgress}
-              className="no-scrollbar min-h-0 flex-1 overflow-y-auto pr-1 xl:overscroll-contain"
+              className="no-scrollbar min-h-0 flex-1 overflow-y-auto xl:overscroll-contain"
             >
             {selectedAssessment ? (
               <div className="flex h-full min-h-full items-stretch">
@@ -1290,21 +2133,31 @@ export function ModuleViewerPage() {
                                       <button
                                         key={answer.id}
                                         type="button"
-                                        disabled={isCurrentQuestionSubmitted}
-                                        onClick={() =>
-                                          setQuizAnswers((previous) => ({
-                                            ...previous,
-                                            [currentQuizQuestion.id]: answer.id,
-                                          }))
+                                        disabled={
+                                          isCurrentQuestionSubmitted ||
+                                          (isCurrentQuestionMultipleChoice &&
+                                            !currentQuizAnswerIds.includes(answer.id) &&
+                                            currentQuizAnswerIds.length >= currentQuizMaxSelections)
                                         }
+                                        onClick={() => handleToggleQuizAnswer(answer.id)}
                                         className={`flex w-full items-center justify-between rounded-lg border px-5 py-4 text-left text-base font-medium disabled:cursor-not-allowed disabled:opacity-70 ${
-                                          currentQuizAnswerId === answer.id
+                                          currentQuizAnswerIds.includes(answer.id)
                                             ? 'border-slate-400 bg-white/5'
                                             : 'border-white/10 bg-slate-900/70 hover:bg-white/5'
                                         }`}
                                       >
                                         <span>{answer.answer_text}</span>
-                                        {currentQuizAnswerId === answer.id ? (
+                                        {isCurrentQuestionMultipleChoice ? (
+                                          <span
+                                            className={`inline-flex h-[18px] w-[18px] items-center justify-center rounded-[4px] border ${
+                                              currentQuizAnswerIds.includes(answer.id)
+                                                ? 'border-brand-300 bg-brand-500/20 text-brand-300'
+                                                : 'border-slate-500/70 text-transparent'
+                                            }`}
+                                          >
+                                            {currentQuizAnswerIds.includes(answer.id) ? <Check size={13} /> : null}
+                                          </span>
+                                        ) : currentQuizAnswerIds.includes(answer.id) ? (
                                           <CheckCircle2 size={18} className="text-brand-400" />
                                         ) : null}
                                       </button>
@@ -1316,11 +2169,13 @@ export function ModuleViewerPage() {
                                   <p className="text-sm text-slate-400">
                                     {isCurrentQuestionSubmitted
                                       ? 'Answer submitted.'
-                                      : 'Submit this answer to proceed to the next question.'}
+                                      : isCurrentQuestionMultipleChoice
+                                        ? `Select up to ${currentQuizMaxSelections} answers, then submit to continue.`
+                                        : 'Submit this answer to proceed to the next question.'}
                                   </p>
                                   <button
                                     type="button"
-                                    disabled={isCurrentQuestionSubmitted || isQuizSubmitting || !currentQuizAnswerId}
+                                    disabled={isCurrentQuestionSubmitted || isQuizSubmitting || !hasCurrentQuizAnswer}
                                     onClick={handleSubmitCurrentQuestion}
                                     className="inline-flex items-center gap-2 rounded-lg border border-cyan-300/60 bg-cyan-500 px-7 py-3 text-base font-semibold text-slate-950 shadow-[0_0_0_1px_rgba(34,211,238,0.35),0_10px_24px_rgba(6,182,212,0.35)] transition hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-60"
                                   >
@@ -1411,21 +2266,31 @@ export function ModuleViewerPage() {
                                   <button
                                     key={answer.id}
                                     type="button"
-                                    disabled={isCurrentQuestionSubmitted}
-                                    onClick={() =>
-                                      setQuizAnswers((previous) => ({
-                                        ...previous,
-                                        [currentQuizQuestion.id]: answer.id,
-                                      }))
+                                    disabled={
+                                      isCurrentQuestionSubmitted ||
+                                      (isCurrentQuestionMultipleChoice &&
+                                        !currentQuizAnswerIds.includes(answer.id) &&
+                                        currentQuizAnswerIds.length >= currentQuizMaxSelections)
                                     }
+                                    onClick={() => handleToggleQuizAnswer(answer.id)}
                                     className={`flex w-full items-center justify-between rounded-lg border px-5 py-4 text-left text-base font-medium disabled:cursor-not-allowed disabled:opacity-70 ${
-                                      currentQuizAnswerId === answer.id
+                                      currentQuizAnswerIds.includes(answer.id)
                                         ? 'border-slate-400 bg-white/5'
                                         : 'border-white/10 bg-slate-900/70 hover:bg-white/5'
                                     }`}
                                   >
                                     <span>{answer.answer_text}</span>
-                                    {currentQuizAnswerId === answer.id ? (
+                                    {isCurrentQuestionMultipleChoice ? (
+                                      <span
+                                        className={`inline-flex h-[18px] w-[18px] items-center justify-center rounded-[4px] border ${
+                                          currentQuizAnswerIds.includes(answer.id)
+                                            ? 'border-brand-300 bg-brand-500/20 text-brand-300'
+                                            : 'border-slate-500/70 text-transparent'
+                                        }`}
+                                      >
+                                        {currentQuizAnswerIds.includes(answer.id) ? <Check size={13} /> : null}
+                                      </span>
+                                    ) : currentQuizAnswerIds.includes(answer.id) ? (
                                       <CheckCircle2 size={18} className="text-brand-400" />
                                     ) : null}
                                   </button>
@@ -1437,11 +2302,13 @@ export function ModuleViewerPage() {
                               <p className="text-sm text-slate-400">
                                 {isCurrentQuestionSubmitted
                                   ? 'Answer submitted.'
-                                  : 'Submit this answer to proceed to the next question.'}
+                                  : isCurrentQuestionMultipleChoice
+                                    ? `Select up to ${currentQuizMaxSelections} answers, then submit to continue.`
+                                    : 'Submit this answer to proceed to the next question.'}
                               </p>
                               <button
                                 type="button"
-                                disabled={isCurrentQuestionSubmitted || isQuizSubmitting || !currentQuizAnswerId}
+                                disabled={isCurrentQuestionSubmitted || isQuizSubmitting || !hasCurrentQuizAnswer}
                                 onClick={handleSubmitCurrentQuestion}
                                 className="inline-flex items-center gap-2 rounded-lg bg-brand-600 px-6 py-3 text-sm font-semibold text-white transition hover:bg-brand-500 disabled:cursor-not-allowed disabled:opacity-60"
                               >
@@ -1487,7 +2354,7 @@ export function ModuleViewerPage() {
                       ) : null}
                     </article>
                   )
-                ) : selectedAssessmentSessionResult ? (
+                ) : selectedAssessmentDisplayResult ? (
                   isSimulationAssessment ? (
                     <article className="h-full w-full overflow-hidden rounded-2xl border border-cyan-400/30 bg-slate-950 shadow-sm">
                       <div className="grid h-full lg:grid-cols-[minmax(0,1fr)_360px]">
@@ -1496,32 +2363,32 @@ export function ModuleViewerPage() {
                             Assessment Complete
                           </p>
                           <h3 className="mt-3 text-3xl font-bold text-white md:text-4xl">
-                            {selectedAssessmentSessionResult.passed ? 'Quiz Passed' : 'Quiz Failed'}
+                            {selectedAssessmentDisplayResult.passed ? 'Quiz Passed' : 'Quiz Failed'}
                           </h3>
                           <p className="mt-2 text-sm text-slate-300">
                             {selectedAssessment.title} evaluation finished. Review your score and continue to the next learning step.
                           </p>
 
-                          <div className="mt-6 grid gap-3 sm:grid-cols-3">
-                            <div className="rounded-lg border border-white/10 bg-white/5 p-4">
-                              <p className="font-mono text-[11px] uppercase tracking-wider text-slate-400">Score</p>
-                              <p className="mt-1 text-2xl font-bold text-cyan-300">{Number(selectedAssessmentSessionResult.score)}%</p>
-                            </div>
+                            <div className="mt-6 grid gap-3 sm:grid-cols-3">
+                              <div className="rounded-lg border border-white/10 bg-white/5 p-4">
+                                <p className="font-mono text-[11px] uppercase tracking-wider text-slate-400">Score</p>
+                                <p className="mt-1 text-2xl font-bold text-cyan-300">{Number(selectedAssessmentDisplayResult.score)}%</p>
+                              </div>
                             <div className="rounded-lg border border-white/10 bg-white/5 p-4">
                               <p className="font-mono text-[11px] uppercase tracking-wider text-slate-400">Passing</p>
                               <p className="mt-1 text-2xl font-bold text-white">{selectedAssessment.passing_score}%</p>
                             </div>
-                            <div className="rounded-lg border border-white/10 bg-white/5 p-4">
-                              <p className="font-mono text-[11px] uppercase tracking-wider text-slate-400">Attempt</p>
-                              <p className="mt-1 text-2xl font-bold text-white">#{selectedAssessmentSessionResult.attempt_no}</p>
+                              <div className="rounded-lg border border-white/10 bg-white/5 p-4">
+                                <p className="font-mono text-[11px] uppercase tracking-wider text-slate-400">Attempt</p>
+                                <p className="mt-1 text-2xl font-bold text-white">#{selectedAssessmentDisplayResult.attempt_no}</p>
+                              </div>
                             </div>
-                          </div>
 
                           <div className="mt-5">
                             <StatusPill
-                              text={selectedAssessmentSessionResult.passed ? 'Passed' : 'Failed'}
+                              text={selectedAssessmentDisplayResult.passed ? 'Passed' : 'Failed'}
                               className={
-                                selectedAssessmentSessionResult.passed
+                                selectedAssessmentDisplayResult.passed
                                   ? 'border-emerald-300/30 bg-emerald-500/10 text-emerald-200'
                                   : 'border-rose-300/30 bg-rose-500/10 text-rose-200'
                               }
@@ -1564,60 +2431,104 @@ export function ModuleViewerPage() {
                       </div>
                     </article>
                   ) : (
-                    <article className="w-full rounded-2xl border border-white/10 bg-slate-900/70 p-6 shadow-sm md:p-8">
-                      <p className="text-xs font-semibold uppercase tracking-[0.14em] text-brand-300">Assessment Complete</p>
-                      <h3 className="mt-2 text-2xl font-bold text-white">
-                        {selectedAssessmentSessionResult.passed ? 'Quiz Passed' : 'Quiz Failed'}
-                      </h3>
-                      <p className="mt-2 text-sm text-slate-300">
-                        {selectedAssessment.title} finished. Review your score below.
-                      </p>
+                    (() => {
+                      const stageTitle = selectedAssessmentStage === 'post' ? 'Post-test complete' : 'Pre-test complete';
+                      const canRetake =
+                        selectedAssessmentAttemptsRemaining > 0 &&
+                        !isQuizSubmitting &&
+                        !isQuizLoading;
 
-                      <div className="mt-6 grid gap-3 sm:grid-cols-3">
-                        <div className="rounded-lg border border-white/10 bg-white/5 p-4">
-                          <p className="text-[11px] uppercase tracking-wider text-slate-400">Score</p>
-                          <p className="mt-1 text-2xl font-bold text-brand-300">{Number(selectedAssessmentSessionResult.score)}%</p>
-                        </div>
-                        <div className="rounded-lg border border-white/10 bg-white/5 p-4">
-                          <p className="text-[11px] uppercase tracking-wider text-slate-400">Passing</p>
-                          <p className="mt-1 text-2xl font-bold text-white">{selectedAssessment.passing_score}%</p>
-                        </div>
-                        <div className="rounded-lg border border-white/10 bg-white/5 p-4">
-                          <p className="text-[11px] uppercase tracking-wider text-slate-400">Attempt</p>
-                          <p className="mt-1 text-2xl font-bold text-white">#{selectedAssessmentSessionResult.attempt_no}</p>
-                        </div>
-                      </div>
+                      return (
+                        <article className="flex h-full w-full items-center justify-center rounded-2xl border border-white/10 bg-slate-900/70 p-6 shadow-sm md:p-8">
+                          <div className="w-full max-w-xl text-center">
+                              <div className="mx-auto mb-6 flex h-20 w-20 items-center justify-center">
+                                {selectedAssessmentDisplayResult.passed ? (
+                                  <svg viewBox="0 0 80 80" width="80" height="80" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                                    <circle cx="40" cy="40" r="36" fill="none" stroke="rgba(148,163,184,0.35)" strokeWidth="6" />
+                                    <circle
+                                      cx="40"
+                                      cy="40"
+                                      r="36"
+                                      fill="none"
+                                      stroke="rgb(29 158 117)"
+                                      strokeWidth="6"
+                                      strokeDasharray="226"
+                                      strokeDashoffset="0"
+                                      strokeLinecap="round"
+                                      transform="rotate(-90 40 40)"
+                                    />
+                                    <polyline
+                                      points="25,41 36,52 56,30"
+                                      fill="none"
+                                      stroke="rgb(29 158 117)"
+                                      strokeWidth="5"
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                    />
+                                  </svg>
+                                ) : (
+                                  <svg viewBox="0 0 80 80" width="80" height="80" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                                    <circle cx="40" cy="40" r="36" fill="none" stroke="rgba(148,163,184,0.35)" strokeWidth="6" />
+                                    <circle
+                                      cx="40"
+                                      cy="40"
+                                      r="36"
+                                      fill="none"
+                                      stroke="rgb(244 63 94)"
+                                      strokeWidth="6"
+                                      strokeDasharray="226"
+                                      strokeDashoffset="0"
+                                      strokeLinecap="round"
+                                      transform="rotate(-90 40 40)"
+                                    />
+                                    <line x1="28" y1="28" x2="52" y2="52" stroke="rgb(244 63 94)" strokeWidth="6" strokeLinecap="round" />
+                                    <line x1="52" y1="28" x2="28" y2="52" stroke="rgb(244 63 94)" strokeWidth="6" strokeLinecap="round" />
+                                  </svg>
+                                )}
+                              </div>
 
-                      <div className="mt-5">
-                        <StatusPill
-                          text={selectedAssessmentSessionResult.passed ? 'Passed' : 'Failed'}
-                          className={
-                            selectedAssessmentSessionResult.passed
-                              ? 'border-emerald-300/30 bg-emerald-500/10 text-emerald-200'
-                              : 'border-rose-300/30 bg-rose-500/10 text-rose-200'
-                          }
-                        />
-                      </div>
+                              <p className="text-[12px] font-medium uppercase tracking-[0.08em] text-slate-400">{stageTitle}</p>
+                              <h3 className="mt-1 text-[28px] font-semibold text-white">
+                                {selectedAssessmentDisplayResult.passed ? 'Quiz passed' : 'Quiz failed'}
+                              </h3>
 
-                      <div className="mt-6 flex flex-wrap items-center gap-3">
-                        <button
-                          type="button"
-                          disabled={
-                            selectedAssessmentAttemptsRemaining <= 0 ||
-                            isQuizSubmitting ||
-                            isQuizLoading
-                          }
-                          onClick={() => void handleStartQuiz(selectedAssessment)}
-                          className="inline-flex items-center gap-2 rounded-lg bg-brand-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-brand-500 disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                          <CirclePlay size={16} />
-                          Take Quiz Again
-                        </button>
-                        <p className="text-sm text-slate-300">
-                          Remaining attempts: {selectedAssessmentAttemptsRemaining}
-                        </p>
-                      </div>
-                    </article>
+                              <div className="mx-auto mt-8 grid max-w-xl grid-cols-1 gap-3 sm:grid-cols-3">
+                                <div className="rounded-lg border border-white/10 bg-slate-950/70 p-4">
+                                  <p className="text-[11px] uppercase tracking-[0.06em] text-slate-400">Score</p>
+                                  <p className={`mt-1 text-2xl font-semibold ${selectedAssessmentDisplayResult.passed ? 'text-emerald-300' : 'text-rose-300'}`}>
+                                    {Number(selectedAssessmentDisplayResult.score)}%
+                                  </p>
+                                </div>
+                                <div className="rounded-lg border border-white/10 bg-slate-950/70 p-4">
+                                  <p className="text-[11px] uppercase tracking-[0.06em] text-slate-400">Passing</p>
+                                  <p className="mt-1 text-2xl font-semibold text-white">{selectedAssessment.passing_score}%</p>
+                                </div>
+                                <div className="rounded-lg border border-white/10 bg-slate-950/70 p-4">
+                                  <p className="text-[11px] uppercase tracking-[0.06em] text-slate-400">Attempt</p>
+                                  <p className="mt-1 text-2xl font-semibold text-white">#{selectedAssessmentDisplayResult.attempt_no}</p>
+                                </div>
+                              </div>
+
+                              <div className="mt-8">
+                                <button
+                                  type="button"
+                                  disabled={!canRetake}
+                                  onClick={() => void handleStartQuiz(selectedAssessment)}
+                                  className="inline-flex items-center gap-2 rounded-md bg-emerald-600 px-6 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                  <CirclePlay size={16} />
+                                  Retake quiz
+                                </button>
+                                <p className="mt-2 text-xs text-slate-400">
+                                  {selectedAssessmentAttemptsRemaining > 0
+                                    ? `Remaining attempts: ${selectedAssessmentAttemptsRemaining}`
+                                    : 'No attempts remaining'}
+                                </p>
+                              </div>
+                          </div>
+                        </article>
+                      );
+                    })()
                   )
                 ) : (
                   (() => {
@@ -1628,65 +2539,71 @@ export function ModuleViewerPage() {
                     const unlocked = isAssessmentUnlocked(selectedAssessment);
 
                     if (!isSimulationAssessment) {
+                      const stageTitle = stage === 'post' ? 'Post-test' : 'Pre-test';
+                      const latestScore = latest ? `${Number(latest.score)}%` : '—';
+                      const attemptsRemainingLabel =
+                        selectedAssessmentAttemptsRemaining === 1 ? 'attempt' : 'attempts';
+                      const canStart =
+                        unlocked &&
+                        selectedAssessmentAttemptsRemaining > 0 &&
+                        !isQuizSubmitting &&
+                        !isQuizLoading;
+
                       return (
-                        <article className="w-full rounded-2xl border border-white/10 bg-slate-900/70 p-6 shadow-sm md:p-8">
-                          <div className="inline-flex items-center gap-2">
-                            <span className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-wider ${meta.chipClass}`}>
-                              {meta.label}
-                            </span>
-                            {!unlocked ? (
-                              <span className="inline-flex items-center gap-1 rounded-full border border-slate-400/30 bg-slate-700/30 px-2.5 py-1 text-[11px] font-semibold text-slate-300">
-                                <Lock size={12} />
-                                Locked
-                              </span>
-                            ) : null}
+                        <article className="flex h-full w-full items-center justify-center rounded-2xl border border-white/10 bg-slate-900/70 p-6 shadow-sm md:p-8">
+                          <div className="w-full max-w-xl text-center">
+                              <div className="mx-auto mb-6 flex h-20 w-20 items-center justify-center">
+                                <svg viewBox="0 0 80 80" width="80" height="80" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                                  <circle cx="40" cy="40" r="36" fill="none" stroke="rgba(148,163,184,0.35)" strokeWidth="6" />
+                                  <circle cx="40" cy="40" r="10" fill="rgba(148,163,184,0.55)" />
+                                  <line x1="40" y1="16" x2="40" y2="42" stroke="rgba(148,163,184,0.75)" strokeWidth="6" strokeLinecap="round" />
+                                  <circle cx="40" cy="57" r="4" fill="rgba(148,163,184,0.75)" />
+                                </svg>
+                              </div>
+
+                              <p className="text-[12px] font-medium uppercase tracking-[0.08em] text-slate-400">{stageTitle}</p>
+                              <h3 className="mt-1 text-[28px] font-semibold text-white">Ready when you are</h3>
+                              <p className="mt-2 text-sm text-slate-300">
+                                {`You need ${selectedAssessment.passing_score}% to pass. You have ${selectedAssessmentAttemptsRemaining} of ${selectedAssessment.attempt_limit} ${attemptsRemainingLabel} remaining.`}
+                              </p>
+                              {!unlocked ? (
+                                <p className="mt-2 text-xs font-medium uppercase tracking-[0.08em] text-amber-300">
+                                  {assessmentUnlockMessage(selectedAssessment)}
+                                </p>
+                              ) : null}
+
+                              <div className="mx-auto mt-8 grid max-w-xl grid-cols-1 gap-3 sm:grid-cols-3">
+                                <div className="rounded-lg border border-white/10 bg-slate-950/70 p-4">
+                                  <p className="text-[11px] uppercase tracking-[0.06em] text-slate-400">Score</p>
+                                  <p className="mt-1 text-2xl font-semibold text-slate-300">{latestScore}</p>
+                                </div>
+                                <div className="rounded-lg border border-white/10 bg-slate-950/70 p-4">
+                                  <p className="text-[11px] uppercase tracking-[0.06em] text-slate-400">Passing</p>
+                                  <p className="mt-1 text-2xl font-semibold text-white">{selectedAssessment.passing_score}%</p>
+                                </div>
+                                <div className="rounded-lg border border-white/10 bg-slate-950/70 p-4">
+                                  <p className="text-[11px] uppercase tracking-[0.06em] text-slate-400">Attempts</p>
+                                  <p className="mt-1 text-2xl font-semibold text-white">{selectedAssessmentAttemptsRemaining}</p>
+                                </div>
+                              </div>
+
+                              <div className="mt-8">
+                                <button
+                                  type="button"
+                                  disabled={!canStart}
+                                  onClick={() => void handleStartQuiz(selectedAssessment)}
+                                  className="inline-flex items-center gap-2 rounded-md bg-slate-100 px-7 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                  <CirclePlay size={16} />
+                                  {selectedAssessmentAttemptCount > 0 ? 'Retake quiz' : 'Start quiz'}
+                                </button>
+                                <p className="mt-2 text-xs text-slate-400">
+                                  {selectedAssessmentAttemptsRemaining > 0
+                                    ? `Remaining attempts: ${selectedAssessmentAttemptsRemaining}`
+                                    : 'No attempts remaining'}
+                                </p>
+                              </div>
                           </div>
-
-                          <h3 className="mt-4 text-3xl font-bold text-white">{selectedAssessment.title}</h3>
-                          <p className="mt-2 text-sm text-slate-300">{assessmentUnlockMessage(selectedAssessment)}</p>
-
-                          <div className="mt-6 grid gap-3 sm:grid-cols-3">
-                            <div className="rounded-lg border border-white/10 bg-white/5 p-4">
-                              <p className="text-[11px] uppercase tracking-wider text-slate-400">Passing</p>
-                              <p className="mt-1 text-2xl font-bold text-white">{selectedAssessment.passing_score}%</p>
-                            </div>
-                            <div className="rounded-lg border border-white/10 bg-white/5 p-4">
-                              <p className="text-[11px] uppercase tracking-wider text-slate-400">Timer</p>
-                              <p className="mt-1 text-2xl font-bold text-white">{selectedAssessment.time_limit_minutes}m</p>
-                            </div>
-                            <div className="rounded-lg border border-white/10 bg-white/5 p-4">
-                              <p className="text-[11px] uppercase tracking-wider text-slate-400">Attempts</p>
-                              <p className="mt-1 text-2xl font-bold text-white">{selectedAssessment.attempt_limit}</p>
-                            </div>
-                          </div>
-
-                          <div className="mt-6 flex flex-wrap items-center gap-3">
-                            <button
-                              type="button"
-                              disabled={
-                                !unlocked ||
-                                selectedAssessmentAttemptsRemaining <= 0 ||
-                                isQuizSubmitting ||
-                                isQuizLoading
-                              }
-                              onClick={() => void handleStartQuiz(selectedAssessment)}
-                              className="inline-flex items-center gap-2 rounded-lg bg-brand-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-brand-500 disabled:cursor-not-allowed disabled:opacity-60"
-                            >
-                              <CirclePlay size={16} />
-                              {selectedAssessmentAttemptCount > 0 ? 'Take Quiz Again' : 'Start Quiz'}
-                            </button>
-                            <p className="text-sm text-slate-300">
-                              Remaining attempts: {selectedAssessmentAttemptsRemaining}
-                            </p>
-                          </div>
-
-                          {latest ? (
-                            <p className="mt-4 text-xs text-slate-400">
-                              Latest attempt: {Number(latest.score)}% ({latest.passed ? 'Passed' : 'Failed'})
-                            </p>
-                          ) : (
-                            <p className="mt-4 text-xs text-slate-400">No attempts yet.</p>
-                          )}
                         </article>
                       );
                     }
@@ -1794,7 +2711,7 @@ export function ModuleViewerPage() {
                           <div>
                             {selectedLessonStep.html ? (
                               <div
-                                className="max-w-none space-y-3 text-sm leading-relaxed text-slate-200 [&_h1]:text-2xl [&_h1]:font-bold [&_h1]:text-white [&_h2]:text-xl [&_h2]:font-semibold [&_h2]:text-white [&_h3]:text-lg [&_h3]:font-semibold [&_h3]:text-white [&_li]:ml-5 [&_li]:list-disc [&_ol>li]:list-decimal [&_p]:text-slate-200"
+                                className={richTextContentClassName}
                                 dangerouslySetInnerHTML={{ __html: selectedLessonStep.html }}
                               />
                             ) : (
@@ -1804,7 +2721,11 @@ export function ModuleViewerPage() {
 
                           <div>
                             {selectedLessonStep.mediaUrls.length > 0 ? (
-                              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                              <div
+                                className={`mt-4 grid gap-3 ${
+                                  selectedLessonStep.mediaUrls.length > 1 ? 'sm:grid-cols-2' : 'grid-cols-1'
+                                }`}
+                              >
                                 {selectedLessonStep.mediaUrls.map((mediaUrl, mediaIndex) =>
                                   isVideoMediaUrl(mediaUrl) ? (
                                     <video
@@ -1856,7 +2777,7 @@ export function ModuleViewerPage() {
                                     <div>
                                       {sectionHtml ? (
                                         <div
-                                          className="max-w-none space-y-3 text-sm leading-relaxed text-slate-200 [&_h1]:text-2xl [&_h1]:font-bold [&_h1]:text-white [&_h2]:text-xl [&_h2]:font-semibold [&_h2]:text-white [&_h3]:text-lg [&_h3]:font-semibold [&_h3]:text-white [&_li]:ml-5 [&_li]:list-disc [&_ol>li]:list-decimal [&_p]:text-slate-200"
+                                          className={richTextContentClassName}
                                           dangerouslySetInnerHTML={{ __html: sectionHtml }}
                                         />
                                       ) : (
@@ -1883,23 +2804,23 @@ export function ModuleViewerPage() {
                                   </div>
                                 ) : hasSectionMedia ? (
                                   <div
-                                    className={`grid gap-8 xl:items-start ${
+                                    className={`grid items-start gap-8 xl:items-center ${
                                       isTemplateReversed
                                         ? 'xl:grid-cols-[340px_minmax(0,1fr)]'
                                         : 'xl:grid-cols-[minmax(0,1fr)_340px]'
                                     }`}
                                   >
-                                    <div className={isTemplateReversed ? 'xl:order-2' : ''}>
+                                    <div className={`min-w-0 ${isTemplateReversed ? 'xl:order-2' : ''}`}>
                                       {sectionHtml ? (
                                         <div
-                                          className="max-w-none space-y-3 text-sm leading-relaxed text-slate-200 [&_h1]:text-2xl [&_h1]:font-bold [&_h1]:text-white [&_h2]:text-xl [&_h2]:font-semibold [&_h2]:text-white [&_h3]:text-lg [&_h3]:font-semibold [&_h3]:text-white [&_li]:ml-5 [&_li]:list-disc [&_ol>li]:list-decimal [&_p]:text-slate-200"
+                                          className={richTextContentClassName}
                                           dangerouslySetInnerHTML={{ __html: sectionHtml }}
                                         />
                                       ) : (
                                         <p className="text-sm text-slate-400">No text content yet.</p>
                                       )}
                                     </div>
-                                    <div className={isTemplateReversed ? 'xl:order-1' : ''}>
+                                    <div className={`min-w-0 xl:flex xl:items-center ${isTemplateReversed ? 'xl:order-1' : ''}`}>
                                       {isVideoMediaUrl(sectionMediaUrl) ? (
                                         <video
                                           src={sectionMediaUrl}
@@ -1919,7 +2840,7 @@ export function ModuleViewerPage() {
                                   <div>
                                     {sectionHtml ? (
                                       <div
-                                        className="max-w-none space-y-3 text-sm leading-relaxed text-slate-200 [&_h1]:text-2xl [&_h1]:font-bold [&_h1]:text-white [&_h2]:text-xl [&_h2]:font-semibold [&_h2]:text-white [&_h3]:text-lg [&_h3]:font-semibold [&_h3]:text-white [&_li]:ml-5 [&_li]:list-disc [&_ol>li]:list-decimal [&_p]:text-slate-200"
+                                        className={richTextContentClassName}
                                         dangerouslySetInnerHTML={{ __html: sectionHtml }}
                                       />
                                     ) : (

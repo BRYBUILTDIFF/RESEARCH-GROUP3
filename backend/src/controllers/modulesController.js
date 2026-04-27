@@ -250,6 +250,16 @@ export const setModuleLock = asyncHandler(async (req, res) => {
 
 export const getModuleBuilder = asyncHandler(async (req, res) => {
   const { id } = req.params;
+  await pool.query(`
+    ALTER TABLE questions
+    ADD COLUMN IF NOT EXISTS max_selections INTEGER NOT NULL DEFAULT 1;
+  `);
+  await pool.query(`
+    UPDATE questions
+    SET max_selections = 1
+    WHERE question_type = 'single_choice'
+      AND max_selections <> 1;
+  `);
   const moduleResult = await pool.query(
     `
       SELECT
@@ -332,7 +342,7 @@ export const getModuleBuilder = asyncHandler(async (req, res) => {
       ? { rows: [] }
       : await pool.query(
           `
-            SELECT id, quiz_id, prompt, question_type, points, sort_order
+            SELECT id, quiz_id, prompt, question_type, max_selections, points, sort_order
             FROM questions
             WHERE quiz_id = ANY($1::int[])
             ORDER BY quiz_id ASC, sort_order ASC;

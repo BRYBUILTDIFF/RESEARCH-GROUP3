@@ -86,6 +86,7 @@ export interface QuizQuestionRow {
   quiz_id: number;
   prompt: string;
   question_type: string;
+  max_selections: number;
   points: number;
   sort_order: number;
 }
@@ -103,6 +104,7 @@ export interface QuizQuestion {
   id: number;
   prompt: string;
   question_type: string;
+  max_selections: number;
   points: number;
   sort_order: number;
   answers: AnswerOption[];

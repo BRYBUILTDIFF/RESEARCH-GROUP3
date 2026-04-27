@@ -24,8 +24,14 @@ export const submitQuiz = asyncHandler(async (req, res) => {
 
   const selectedAnswers = {};
   for (const item of answers) {
-    if (item.questionId && item.answerId) {
-      selectedAnswers[item.questionId] = item.answerId;
+    const questionId = Number(item.questionId);
+    const answerId = Number(item.answerId);
+    if (!Number.isFinite(questionId) || !Number.isFinite(answerId)) continue;
+    if (!selectedAnswers[questionId]) {
+      selectedAnswers[questionId] = [];
+    }
+    if (!selectedAnswers[questionId].includes(answerId)) {
+      selectedAnswers[questionId].push(answerId);
     }
   }
 

@@ -240,7 +240,7 @@ export async function ensureQuizUnlocked({ enrollmentId, quizId }) {
 export async function evaluateQuizSubmission({ quizId, selectedAnswers }) {
   const questionsResult = await pool.query(
     `
-      SELECT id, points
+      SELECT id, points, question_type, COALESCE(max_selections, 1) AS max_selections
       FROM questions
       WHERE quiz_id = $1
       ORDER BY sort_order ASC;
@@ -256,20 +256,52 @@ export async function evaluateQuizSubmission({ quizId, selectedAnswers }) {
   let earnedPoints = 0;
 
   for (const question of questions) {
-    const selectedAnswerId = selectedAnswers[question.id];
-    if (!selectedAnswerId) continue;
+    const selectedAnswerIdsRaw = selectedAnswers[question.id];
+    const selectedAnswerIds = Array.isArray(selectedAnswerIdsRaw)
+      ? Array.from(new Set(selectedAnswerIdsRaw.map((value) => Number(value)).filter((value) => Number.isFinite(value))))
+      : selectedAnswerIdsRaw
+        ? [Number(selectedAnswerIdsRaw)].filter((value) => Number.isFinite(value))
+        : [];
+    if (selectedAnswerIds.length === 0) continue;
 
-    const answerResult = await pool.query(
+    const answerRowsResult = await pool.query(
       `
-        SELECT is_correct
+        SELECT id, is_correct
         FROM answers
-        WHERE id = $1
-          AND question_id = $2
-        LIMIT 1;
+        WHERE question_id = $1;
       `,
-      [selectedAnswerId, question.id]
+      [question.id]
     );
-    if (answerResult.rowCount > 0 && answerResult.rows[0].is_correct) {
+    if (answerRowsResult.rowCount === 0) continue;
+
+    const validAnswerIdSet = new Set(answerRowsResult.rows.map((row) => Number(row.id)));
+    const filteredSelectedAnswerIds = selectedAnswerIds.filter((id) => validAnswerIdSet.has(id));
+    if (filteredSelectedAnswerIds.length === 0) continue;
+
+    const correctAnswerIdSet = new Set(
+      answerRowsResult.rows.filter((row) => Boolean(row.is_correct)).map((row) => Number(row.id))
+    );
+    const effectiveQuestionType =
+      question.question_type === 'multiple_choice' || correctAnswerIdSet.size > 1 ? 'multiple_choice' : 'single_choice';
+    const maxSelections = Number.isFinite(Number(question.max_selections))
+      ? Math.max(1, Number(question.max_selections))
+      : 1;
+    const allowedSelections = effectiveQuestionType === 'multiple_choice' ? Math.max(maxSelections, correctAnswerIdSet.size) : 1;
+    if (filteredSelectedAnswerIds.length > allowedSelections) continue;
+
+    if (effectiveQuestionType === 'multiple_choice') {
+      const selectedSet = new Set(filteredSelectedAnswerIds);
+      const exactMatch =
+        selectedSet.size === correctAnswerIdSet.size &&
+        [...correctAnswerIdSet].every((correctId) => selectedSet.has(correctId));
+      if (exactMatch) {
+        earnedPoints += Number(question.points);
+      }
+      continue;
+    }
+
+    const selectedAnswerId = filteredSelectedAnswerIds[0];
+    if (correctAnswerIdSet.has(selectedAnswerId)) {
       earnedPoints += Number(question.points);
     }
   }
